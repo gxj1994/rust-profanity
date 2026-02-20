@@ -1,5 +1,6 @@
 //! BIP39 助记词生成与管理 (简化版)
 
+use rand::rngs::OsRng;
 use rand::RngCore;
 use sha2::{Digest, Sha256};
 
@@ -16,9 +17,8 @@ pub struct Mnemonic {
 impl Mnemonic {
     /// 生成随机助记词
     pub fn generate_random() -> anyhow::Result<Self> {
-        let mut rng = rand::thread_rng();
         let mut entropy = [0u8; 32];
-        rng.fill_bytes(&mut entropy);
+        OsRng.fill_bytes(&mut entropy);
         
         Self::from_entropy(&entropy)
     }
