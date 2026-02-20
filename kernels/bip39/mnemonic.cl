@@ -145,11 +145,17 @@ void mod_add_n_mnemonic(const ulong a[4], const ulong b[4], ulong result[4]) {
     }
     
     // 如果结果 >= n，减去 n
-    if (carry || uint256_cmp_mnemonic(result, SECP256K1_N_MNEMONIC) >= 0) {
+    // 将 __constant 数据复制到局部变量进行比较
+    ulong n_local[4];
+    for (int i = 0; i < 4; i++) {
+        n_local[i] = SECP256K1_N_MNEMONIC[i];
+    }
+    
+    if (carry || uint256_cmp_mnemonic(result, n_local) >= 0) {
         carry = 0;
         for (int i = 0; i < 4; i++) {
-            ulong diff = result[i] - SECP256K1_N_MNEMONIC[i] - carry;
-            carry = (result[i] < SECP256K1_N_MNEMONIC[i] + carry) ? 1 : 0;
+            ulong diff = result[i] - n_local[i] - carry;
+            carry = (result[i] < n_local[i] + carry) ? 1 : 0;
             result[i] = diff;
         }
     }

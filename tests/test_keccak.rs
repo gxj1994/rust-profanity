@@ -4,17 +4,10 @@
 use sha3::{Keccak256, Digest};
 use ocl::{ProQue, Buffer, MemFlags};
 
-/// 加载 OpenCL 内核源码
 fn load_kernel_source() -> String {
-    let mut source = String::new();
-    
-    // 加载 keccak.cl
-    source.push_str(include_str!("../kernels/crypto/keccak.cl"));
-    
-    source
+    include_str!("../kernels/crypto/keccak.cl").to_string()
 }
 
-/// Rust 端 Keccak-256 哈希
 fn rust_keccak256(data: &[u8]) -> [u8; 32] {
     let mut hasher = Keccak256::new();
     hasher.update(data);
@@ -24,7 +17,6 @@ fn rust_keccak256(data: &[u8]) -> [u8; 32] {
     hash
 }
 
-/// OpenCL 端 Keccak-256 哈希
 fn opencl_keccak256(data: &[u8]) -> ocl::Result<[u8; 32]> {
     let kernel_source = load_kernel_source();
     
@@ -72,9 +64,7 @@ fn opencl_keccak256(data: &[u8]) -> ocl::Result<[u8; 32]> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pretty_assertions::assert_eq;
 
-    /// 测试空输入
     #[test]
     fn test_keccak256_empty() {
         let data = b"";
@@ -94,7 +84,6 @@ mod tests {
         }
     }
 
-    /// 测试简单字符串
     #[test]
     fn test_keccak256_simple() {
         let test_cases = vec![
@@ -132,7 +121,6 @@ mod tests {
         }
     }
 
-    /// 测试长输入 (多块)
     #[test]
     fn test_keccak256_long_input() {
         // 生成 200 字节的测试数据
@@ -146,7 +134,6 @@ mod tests {
         }
     }
 
-    /// 测试公钥哈希 (以太坊地址生成场景)
     #[test]
     fn test_keccak256_public_key() {
         // 示例未压缩公钥 (65字节: 0x04 + x + y)

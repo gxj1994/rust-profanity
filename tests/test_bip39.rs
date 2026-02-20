@@ -1,10 +1,8 @@
 //! BIP39 助记词测试
-//! 验证 OpenCL 内核与 Rust bip39 crate 的一致性
 
 use bip39::{Mnemonic, Language};
 use ocl::{ProQue, Buffer, MemFlags};
 
-/// 已知的 BIP39 测试向量
 const BIP39_TEST_VECTORS: &[(&str, &str)] = &[
     // (助记词, 种子十六进制)
     (
@@ -21,7 +19,6 @@ const BIP39_TEST_VECTORS: &[(&str, &str)] = &[
     ),
 ];
 
-/// 加载 OpenCL 内核源码
 fn load_kernel_source() -> String {
     let mut source = String::new();
     source.push_str(include_str!("../kernels/crypto/sha512.cl"));
@@ -29,15 +26,12 @@ fn load_kernel_source() -> String {
     source
 }
 
-/// Rust 端 BIP39 助记词到种子
 fn rust_mnemonic_to_seed(mnemonic_phrase: &str) -> [u8; 64] {
     let mnemonic = Mnemonic::parse_in(Language::English, mnemonic_phrase).unwrap();
     let seed = mnemonic.to_seed("");  // 无密码短语
     seed
 }
 
-/// OpenCL 端助记词到种子
-/// 注意：当前 OpenCL 实现使用索引二进制表示，与标准 BIP39 不同
 fn opencl_mnemonic_to_seed(word_indices: &[u16; 24]) -> ocl::Result<[u8; 64]> {
     let kernel_source = load_kernel_source();
     
@@ -102,7 +96,6 @@ fn opencl_mnemonic_to_seed(word_indices: &[u16; 24]) -> ocl::Result<[u8; 64]> {
     Ok(fixed_result)
 }
 
-/// 将助记词短语转换为单词索引数组
 fn mnemonic_to_indices(mnemonic: &str) -> [u16; 24] {
     let words: Vec<&str> = mnemonic.split_whitespace().collect();
     
@@ -121,10 +114,7 @@ fn mnemonic_to_indices(mnemonic: &str) -> [u16; 24] {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pretty_assertions::assert_eq;
 
-    /// 测试标准 BIP39 测试向量 (Rust 端)
-    /// 注意：测试向量需要验证
     #[test]
     fn test_bip39_rust_standard_vectors() {
         // 只测试第一个向量作为示例
@@ -142,7 +132,6 @@ mod tests {
         }
     }
 
-    /// 测试助记词到索引转换
     #[test]
     fn test_mnemonic_to_indices() {
         let mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
@@ -158,8 +147,6 @@ mod tests {
         assert!(indices[23] < 2048);
     }
 
-    /// 测试 OpenCL PBKDF2 实现 (使用索引格式)
-    /// 注意：这与标准 BIP39 不同，仅验证 OpenCL 实现的一致性
     #[test]
     fn test_opencl_pbkdf2() {
         // 使用简单的测试数据
@@ -197,7 +184,6 @@ mod tests {
         }
     }
 
-    /// 测试不同助记词的索引转换
     #[test]
     fn test_various_mnemonics() {
         let test_cases = vec![

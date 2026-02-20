@@ -3,19 +3,8 @@
 use rand::RngCore;
 use sha2::{Digest, Sha256};
 
-/// BIP39 助记词单词表 (2048个单词)
-/// 从文件加载或使用硬编码的前100个单词
-pub static BIP39_WORDLIST: &[&str] = &[
-    "abandon", "ability", "able", "about", "above", "absent", "absorb", "abstract", "absurd", "abuse",
-    "access", "accident", "account", "accuse", "achieve", "acid", "acoustic", "acquire", "across", "act",
-    "action", "actor", "actress", "actual", "adapt", "add", "addict", "address", "adjust", "admit",
-    "adult", "advance", "advice", "aerobic", "affair", "afford", "afraid", "again", "age", "agent",
-    "agree", "ahead", "aim", "air", "airport", "aisle", "alarm", "album", "alcohol", "alert",
-    "alien", "all", "alley", "allow", "almost", "alone", "alpha", "already", "also", "alter",
-    "always", "amateur", "amazing", "among", "amount", "amused", "analyst", "anchor", "ancient", "anger",
-    "angle", "angry", "animal", "ankle", "announce", "annual", "another", "answer", "antenna", "antique",
-    "anxiety", "any", "apart", "apology", "appear", "apple", "approve", "april", "arch", "arctic",
-];
+// 引入完整的 BIP39 单词表
+include!("wordlist.rs");
 
 /// BIP39 助记词
 #[derive(Debug, Clone)]
