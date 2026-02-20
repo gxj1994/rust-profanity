@@ -11,15 +11,9 @@
 #define COND_LEADING_EXACT 0x05  // 精确匹配前导零个数
 
 // 比较前缀
-// param: 要匹配的前缀字节 (最多6字节)
+// param: 要匹配的前缀字节 (最多6字节)，按大端序存储
+// 例如：匹配 "888" 时，param = 0x0000000000383838 (3字节)
 bool compare_prefix(const uchar address[20], ulong param) {
-    // 提取地址前6字节进行比较 (大端序)
-    // address[0] 是最高有效字节
-    ulong addr_prefix = 0;
-    for (int i = 0; i < 6; i++) {
-        addr_prefix = (addr_prefix << 8) | address[i];
-    }
-    
     // 确定 param 的有效字节数
     ulong temp = param;
     uint param_bytes = 0;
@@ -30,24 +24,23 @@ bool compare_prefix(const uchar address[20], ulong param) {
     if (param_bytes == 0) param_bytes = 1;
     if (param_bytes > 6) param_bytes = 6;  // 最多6字节
     
-    // 创建掩码，只比较多字节
-    // 例如：param_bytes=2，则比较前2字节 (48位)
-    ulong mask = (param_bytes == 6) ? 0xFFFFFFFFFFFFFFFFULL 
-                                   : ((1ULL << (param_bytes * 8)) - 1);
-    mask <<= (6 - param_bytes) * 8;  // 左移到高有效位
+    // 直接逐字节比较地址的前 param_bytes 字节
+    // param 是大端序存储，最高有效字节在低位地址
+    for (int i = 0; i < param_bytes; i++) {
+        // 从 param 中提取第 i 个字节（从最高有效字节开始）
+        int shift = (param_bytes - 1 - i) * 8;
+        uchar expected_byte = (param >> shift) & 0xFF;
+        if (address[i] != expected_byte) {
+            return false;
+        }
+    }
     
-    return (addr_prefix & mask) == (param << ((6 - param_bytes) * 8));
+    return true;
 }
 
 // 比较后缀
+// param: 要匹配的后缀字节 (最多6字节)，按大端序存储
 bool compare_suffix(const uchar address[20], ulong param) {
-    // 提取地址后6字节进行比较 (大端序)
-    // address[14] 是后缀的最高有效字节
-    ulong addr_suffix = 0;
-    for (int i = 14; i < 20; i++) {
-        addr_suffix = (addr_suffix << 8) | address[i];
-    }
-    
     // 确定 param 的有效字节数
     ulong temp = param;
     uint param_bytes = 0;
@@ -58,12 +51,18 @@ bool compare_suffix(const uchar address[20], ulong param) {
     if (param_bytes == 0) param_bytes = 1;
     if (param_bytes > 6) param_bytes = 6;  // 最多6字节
     
-    // 创建掩码，只比较多字节
-    // 例如：param_bytes=2，则比较后2字节 (低16位)
-    ulong mask = (param_bytes == 6) ? 0xFFFFFFFFFFFFFFFFULL 
-                                   : ((1ULL << (param_bytes * 8)) - 1);
+    // 直接逐字节比较地址的后 param_bytes 字节
+    // address[20 - param_bytes] 到 address[19] 是后缀部分
+    for (int i = 0; i < param_bytes; i++) {
+        // 从 param 中提取第 i 个字节（从最高有效字节开始）
+        int shift = (param_bytes - 1 - i) * 8;
+        uchar expected_byte = (param >> shift) & 0xFF;
+        if (address[20 - param_bytes + i] != expected_byte) {
+            return false;
+        }
+    }
     
-    return (addr_suffix & mask) == param;
+    return true;
 }
 
 // 统计前导零十六进制字符数

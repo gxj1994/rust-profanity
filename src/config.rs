@@ -70,9 +70,12 @@ impl ConditionType {
 
 /// 解析前缀条件
 /// 
-/// 支持两种格式：
-/// 1. 普通字符串：如 "888"，将每个字符作为 ASCII 字节处理
-/// 2. 十六进制字符串：如 "0x8888" 或 "8888"（偶数长度）
+/// 将输入字符串解析为十六进制字节序列。
+/// 输入应为十六进制字符（0-9, a-f, A-F），每2个字符表示1个字节。
+/// 例如："8888" -> 0x88, 0x88；"888" -> 0x08, 0x88 或报错
+/// 
+/// 注意：以太坊地址显示为十六进制字符串，所以要找以"888"开头的地址，
+/// 应该输入"888"，它会被解析为字节 0x88 0x88 0x88
 /// 
 /// # Example
 /// ```
@@ -83,16 +86,23 @@ impl ConditionType {
 pub fn parse_prefix_condition(prefix: &str) -> anyhow::Result<u64> {
     let hex_str = prefix.trim_start_matches("0x");
     
-    // 尝试作为十六进制解析（偶数长度且只包含十六进制字符）
-    let bytes = if hex_str.len() % 2 == 0 && hex_str.chars().all(|c| c.is_ascii_hexdigit()) {
-        hex::decode(hex_str)?
+    // 验证所有字符都是有效的十六进制字符
+    if !hex_str.chars().all(|c| c.is_ascii_hexdigit()) {
+        anyhow::bail!("Prefix must contain only hexadecimal characters (0-9, a-f, A-F)");
+    }
+    
+    // 将十六进制字符串转换为字节
+    // 如果长度为奇数，在前面补0
+    let hex_str = if hex_str.len() % 2 == 1 {
+        format!("0{}", hex_str)
     } else {
-        // 作为普通字符串，每个字符转为 ASCII 字节
-        hex_str.as_bytes().to_vec()
+        hex_str.to_string()
     };
     
+    let bytes = hex::decode(&hex_str)?;
+    
     if bytes.len() > 6 {
-        anyhow::bail!("Prefix too long, max 6 bytes");
+        anyhow::bail!("Prefix too long, max 6 bytes (12 hex characters)");
     }
     
     let mut param: u64 = 0;
@@ -105,22 +115,28 @@ pub fn parse_prefix_condition(prefix: &str) -> anyhow::Result<u64> {
 
 /// 解析后缀条件
 /// 
-/// 支持两种格式：
-/// 1. 普通字符串：如 "888"，将每个字符作为 ASCII 字节处理
-/// 2. 十六进制字符串：如 "0x8888" 或 "8888"（偶数长度）
+/// 将输入字符串解析为十六进制字节序列。
+/// 输入应为十六进制字符（0-9, a-f, A-F），每2个字符表示1个字节。
 pub fn parse_suffix_condition(suffix: &str) -> anyhow::Result<u64> {
     let hex_str = suffix.trim_start_matches("0x");
     
-    // 尝试作为十六进制解析（偶数长度且只包含十六进制字符）
-    let bytes = if hex_str.len() % 2 == 0 && hex_str.chars().all(|c| c.is_ascii_hexdigit()) {
-        hex::decode(hex_str)?
+    // 验证所有字符都是有效的十六进制字符
+    if !hex_str.chars().all(|c| c.is_ascii_hexdigit()) {
+        anyhow::bail!("Suffix must contain only hexadecimal characters (0-9, a-f, A-F)");
+    }
+    
+    // 将十六进制字符串转换为字节
+    // 如果长度为奇数，在前面补0
+    let hex_str = if hex_str.len() % 2 == 1 {
+        format!("0{}", hex_str)
     } else {
-        // 作为普通字符串，每个字符转为 ASCII 字节
-        hex_str.as_bytes().to_vec()
+        hex_str.to_string()
     };
     
+    let bytes = hex::decode(&hex_str)?;
+    
     if bytes.len() > 6 {
-        anyhow::bail!("Suffix too long, max 6 bytes");
+        anyhow::bail!("Suffix too long, max 6 bytes (12 hex characters)");
     }
     
     let mut param: u64 = 0;
