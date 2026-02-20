@@ -56,10 +56,7 @@ uchar mnemonic_to_string(const mnemonic_t* mnemonic, uchar* output, uchar max_le
 void mnemonic_to_seed(const mnemonic_t* mnemonic, seed_t* seed) {
     // 构建助记词字符串 (最大约 24 * 8 + 23 = 215 字节)
     uchar password[256];
-    // 初始化数组以避免未定义行为
-    for (int i = 0; i < 256; i++) {
-        password[i] = 0;
-    }
+    // 使用局部初始化，只清零需要的部分
     uchar password_len = mnemonic_to_string(mnemonic, password, 255);
     
     // salt = "mnemonic"
@@ -140,15 +137,16 @@ void mod_add_n_mnemonic(const mp_number* a, const mp_number* b, mp_number* resul
 // index: 派生索引 (>= 0x80000000 表示硬化派生)
 // child_key: 输出 64 字节
 void derive_child_key(const uchar parent_key[64], uint index, uchar child_key[64]) {
-    // 初始化 data 数组，避免未定义行为
-    uchar data[37] = {0};
+    uchar data[37];
     
     if (index >= 0x80000000) {
         // 硬化派生: 使用 0x00 || 父私钥 || 索引
         data[0] = 0x00;
-        for (int i = 0; i < 32; i++) {
-            data[i + 1] = parent_key[i];  // 父私钥
-        }
+        // 使用 ulong 指针批量复制 32 字节私钥
+        *((ulong*)(data + 1)) = *((ulong*)parent_key);
+        *((ulong*)(data + 9)) = *((ulong*)(parent_key + 8));
+        *((ulong*)(data + 17)) = *((ulong*)(parent_key + 16));
+        *((ulong*)(data + 25)) = *((ulong*)(parent_key + 24));
     } else {
         // 普通派生: 使用 压缩父公钥 || 索引
         // 需要先计算父公钥
@@ -161,10 +159,11 @@ void derive_child_key(const uchar parent_key[64], uint index, uchar child_key[64
         uchar y_lsb = parent_public[64];  // Y坐标的最后一个字节
         data[0] = (y_lsb & 1) ? 0x03 : 0x02;  // 奇数Y用0x03，偶数Y用0x02
         
-        // 复制X坐标 (32字节)
-        for (int i = 0; i < 32; i++) {
-            data[i + 1] = parent_public[i + 1];  // 跳过0x04前缀
-        }
+        // 复制X坐标 (32字节)，跳过 0x04 前缀
+        *((ulong*)(data + 1)) = *((ulong*)(parent_public + 1));
+        *((ulong*)(data + 9)) = *((ulong*)(parent_public + 9));
+        *((ulong*)(data + 17)) = *((ulong*)(parent_public + 17));
+        *((ulong*)(data + 25)) = *((ulong*)(parent_public + 25));
     }
     
     // 添加索引 (大端序)
@@ -187,7 +186,8 @@ void derive_child_key(const uchar parent_key[64], uint index, uchar child_key[64
     
     // BIP32 IL 有效性检查: 如果 left_hmac >= n 或 left_hmac == 0，则当前索引无效
     // 概率极低，但严格实现应添加检查
-    mp_number zero = {{0, 0, 0, 0, 0, 0, 0, 0}};
+    // 零值常量
+    const mp_number zero = {{0, 0, 0, 0, 0, 0, 0, 0}};
     mp_number n_local;
     for (int i = 0; i < 8; i++) {
         n_local.d[i] = SECP256K1_N_MNEMONIC[i];
@@ -195,9 +195,10 @@ void derive_child_key(const uchar parent_key[64], uint index, uchar child_key[64
     if (mp_cmp_n(&left_hmac, &zero) == 0 ||
         mp_cmp_n(&left_hmac, &n_local) >= 0) {
         // IL 无效，置零子私钥（实际应处理重试或返回错误标志）
-        for (int i = 0; i < 32; i++) {
-            child_key[i] = 0;
-        }
+        *((ulong*)child_key) = 0;
+        *((ulong*)(child_key + 8)) = 0;
+        *((ulong*)(child_key + 16)) = 0;
+        *((ulong*)(child_key + 24)) = 0;
     } else {
         // 模加: child_priv = (parent_priv + left_hmac) mod n
         mod_add_n_mnemonic(&parent_priv, &left_hmac, &child_priv);
@@ -206,30 +207,27 @@ void derive_child_key(const uchar parent_key[64], uint index, uchar child_key[64
         mp_to_bytes(&child_priv, child_key);
     }
     
-    // 输出子链码 (后32字节) - 直接复制 HMAC 右半部分
-    for (int i = 0; i < 32; i++) {
-        child_key[32 + i] = hmac_result[32 + i];
-    }
+    // 输出子链码 (后32字节) - 直接复制 HMAC 右半部分 (使用 ulong 指针)
+    *((ulong*)(child_key + 32)) = *((ulong*)(hmac_result + 32));
+    *((ulong*)(child_key + 40)) = *((ulong*)(hmac_result + 40));
+    *((ulong*)(child_key + 48)) = *((ulong*)(hmac_result + 48));
+    *((ulong*)(child_key + 56)) = *((ulong*)(hmac_result + 56));
 }
 
 // 完整的派生路径
-void derive_path(const seed_t* seed, const uint* path, uint path_len, uchar private_key[32]) {
-    uchar master_key[64];
-    seed_to_master_key(seed, master_key);
-    
+void derive_path(const seed_t* seed, __constant const uint* path, uint path_len, uchar private_key[32]) {
     uchar current_key[64];
-    for (int i = 0; i < 64; i++) {
-        current_key[i] = master_key[i];
-    }
+    seed_to_master_key(seed, current_key);
     
     for (uint i = 0; i < path_len; i++) {
         derive_child_key(current_key, path[i], current_key);
     }
     
-    // 取前32字节作为私钥
-    for (int i = 0; i < 32; i++) {
-        private_key[i] = current_key[i];
-    }
+    // 取前32字节作为私钥 (使用指针直接复制，避免循环)
+    *((ulong*)private_key) = *((ulong*)current_key);
+    *((ulong*)(private_key + 8)) = *((ulong*)(current_key + 8));
+    *((ulong*)(private_key + 16)) = *((ulong*)(current_key + 16));
+    *((ulong*)(private_key + 24)) = *((ulong*)(current_key + 24));
 }
 
 // 获取以太坊私钥 (标准派生路径 m/44'/60'/0'/0/0)
@@ -237,13 +235,8 @@ void get_ethereum_private_key(const mnemonic_t* mnemonic, uchar private_key[32])
     seed_t seed;
     mnemonic_to_seed(mnemonic, &seed);
     
-    // 复制派生路径到局部变量
-    uint path[5];
-    for (int i = 0; i < 5; i++) {
-        path[i] = DERIVATION_PATH[i];
-    }
-    
-    derive_path(&seed, path, 5, private_key);
+    // 直接使用 __constant 派生路径，避免局部拷贝
+    derive_path(&seed, DERIVATION_PATH, 5, private_key);
 }
 
 // 兼容接口: local_mnemonic_t 类型在 search.cl 中定义

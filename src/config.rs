@@ -70,14 +70,26 @@ impl ConditionType {
 
 /// 解析前缀条件
 /// 
+/// 支持两种格式：
+/// 1. 普通字符串：如 "888"，将每个字符作为 ASCII 字节处理
+/// 2. 十六进制字符串：如 "0x8888" 或 "8888"（偶数长度）
+/// 
 /// # Example
 /// ```
 /// use rust_profanity::parse_prefix_condition;
 /// let condition = parse_prefix_condition("8888").unwrap();
+/// let condition2 = parse_prefix_condition("888").unwrap();
 /// ```
 pub fn parse_prefix_condition(prefix: &str) -> anyhow::Result<u64> {
     let hex_str = prefix.trim_start_matches("0x");
-    let bytes = hex::decode(hex_str)?;
+    
+    // 尝试作为十六进制解析（偶数长度且只包含十六进制字符）
+    let bytes = if hex_str.len() % 2 == 0 && hex_str.chars().all(|c| c.is_ascii_hexdigit()) {
+        hex::decode(hex_str)?
+    } else {
+        // 作为普通字符串，每个字符转为 ASCII 字节
+        hex_str.as_bytes().to_vec()
+    };
     
     if bytes.len() > 6 {
         anyhow::bail!("Prefix too long, max 6 bytes");
@@ -92,9 +104,20 @@ pub fn parse_prefix_condition(prefix: &str) -> anyhow::Result<u64> {
 }
 
 /// 解析后缀条件
+/// 
+/// 支持两种格式：
+/// 1. 普通字符串：如 "888"，将每个字符作为 ASCII 字节处理
+/// 2. 十六进制字符串：如 "0x8888" 或 "8888"（偶数长度）
 pub fn parse_suffix_condition(suffix: &str) -> anyhow::Result<u64> {
     let hex_str = suffix.trim_start_matches("0x");
-    let bytes = hex::decode(hex_str)?;
+    
+    // 尝试作为十六进制解析（偶数长度且只包含十六进制字符）
+    let bytes = if hex_str.len() % 2 == 0 && hex_str.chars().all(|c| c.is_ascii_hexdigit()) {
+        hex::decode(hex_str)?
+    } else {
+        // 作为普通字符串，每个字符转为 ASCII 字节
+        hex_str.as_bytes().to_vec()
+    };
     
     if bytes.len() > 6 {
         anyhow::bail!("Suffix too long, max 6 bytes");

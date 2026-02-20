@@ -72,90 +72,68 @@ void keccak_f1600(ulong st[25]) {
     }
 }
 
+// 字节序转换辅助函数 - 8字节小端序加载
+ulong load_u64_le(const uchar* p) {
+    return ((ulong)p[0]) | ((ulong)p[1] << 8) | ((ulong)p[2] << 16) | ((ulong)p[3] << 24) |
+           ((ulong)p[4] << 32) | ((ulong)p[5] << 40) | ((ulong)p[6] << 48) | ((ulong)p[7] << 56);
+}
+
+// 字节序转换辅助函数 - 8字节小端序存储
+void store_u64_le(uchar* p, ulong v) {
+    p[0] = (uchar)v; p[1] = (uchar)(v >> 8); p[2] = (uchar)(v >> 16); p[3] = (uchar)(v >> 24);
+    p[4] = (uchar)(v >> 32); p[5] = (uchar)(v >> 40); p[6] = (uchar)(v >> 48); p[7] = (uchar)(v >> 56);
+}
+
 // Keccak-256 哈希函数
 // 输出 32 字节哈希
 void keccak256(const uchar* in, uint inlen, uchar md[32]) {
-    // 使用 uchar 数组直接操作，避免字节序问题
-    uchar state[200] = {0}; // 1600 bits = 200 bytes
+    // 直接使用 ulong 数组作为状态，避免反复转换
+    ulong st[25] = {0}; // 1600 bits = 25 * 64 bits
     
     // 吸收阶段
-    uint rate = 136; // 1088 bits for Keccak-256
+    uint rate = 136; // 1088 bits for Keccak-256 (17 * 8 bytes)
     uint i = 0;
     
     while (i < inlen) {
         uint block_size = (inlen - i < rate) ? (inlen - i) : rate;
         
-        // XOR 输入到状态
-        for (uint j = 0; j < block_size; j++) {
-            state[j] ^= in[i + j];
+        // XOR 输入到状态 (直接操作 ulong 数组)
+        uint j = 0;
+        for (; j + 8 <= block_size; j += 8) {
+            st[j >> 3] ^= load_u64_le(&in[i + j]);
+        }
+        // 处理剩余字节 (< 8)
+        if (j < block_size) {
+            ulong tail = 0;
+            for (uint k = 0; k < block_size - j; k++) {
+                tail |= ((ulong)in[i + j + k]) << (k * 8);
+            }
+            st[j >> 3] ^= tail;
         }
         
         i += block_size;
         
         if (block_size == rate) {
-            // 将字节数组转换为 ulong 数组进行置换
-            ulong st[25];
-            for (int j = 0; j < 25; j++) {
-                st[j] = ((ulong)state[j*8]) |
-                        ((ulong)state[j*8+1] << 8) |
-                        ((ulong)state[j*8+2] << 16) |
-                        ((ulong)state[j*8+3] << 24) |
-                        ((ulong)state[j*8+4] << 32) |
-                        ((ulong)state[j*8+5] << 40) |
-                        ((ulong)state[j*8+6] << 48) |
-                        ((ulong)state[j*8+7] << 56);
-            }
-            
             keccak_f1600(st);
-            
-            // 将结果转换回字节数组
-            for (int j = 0; j < 25; j++) {
-                state[j*8] = (uchar)(st[j]);
-                state[j*8+1] = (uchar)(st[j] >> 8);
-                state[j*8+2] = (uchar)(st[j] >> 16);
-                state[j*8+3] = (uchar)(st[j] >> 24);
-                state[j*8+4] = (uchar)(st[j] >> 32);
-                state[j*8+5] = (uchar)(st[j] >> 40);
-                state[j*8+6] = (uchar)(st[j] >> 48);
-                state[j*8+7] = (uchar)(st[j] >> 56);
-            }
         }
     }
     
-    // 填充
-    state[inlen % rate] ^= 0x01;
-    state[rate - 1] ^= 0x80;
+    // 填充 - 直接在 ulong 数组上操作
+    uint tail_len = inlen % rate;
+    uint word_idx = tail_len >> 3;
+    uint byte_idx = tail_len & 7;
+    
+    // domain separation
+    st[word_idx] ^= ((ulong)0x01) << (byte_idx * 8);
+    // padding end
+    st[(rate >> 3) - 1] ^= 0x8000000000000000ULL;
     
     // 最终置换
-    ulong st[25];
-    for (int j = 0; j < 25; j++) {
-        st[j] = ((ulong)state[j*8]) |
-                ((ulong)state[j*8+1] << 8) |
-                ((ulong)state[j*8+2] << 16) |
-                ((ulong)state[j*8+3] << 24) |
-                ((ulong)state[j*8+4] << 32) |
-                ((ulong)state[j*8+5] << 40) |
-                ((ulong)state[j*8+6] << 48) |
-                ((ulong)state[j*8+7] << 56);
-    }
-    
     keccak_f1600(st);
     
-    // 将结果转换回字节数组
-    for (int j = 0; j < 25; j++) {
-        state[j*8] = (uchar)(st[j]);
-        state[j*8+1] = (uchar)(st[j] >> 8);
-        state[j*8+2] = (uchar)(st[j] >> 16);
-        state[j*8+3] = (uchar)(st[j] >> 24);
-        state[j*8+4] = (uchar)(st[j] >> 32);
-        state[j*8+5] = (uchar)(st[j] >> 40);
-        state[j*8+6] = (uchar)(st[j] >> 48);
-        state[j*8+7] = (uchar)(st[j] >> 56);
-    }
-    
-    // 输出前 32 字节
-    for (int i = 0; i < 32; i++) {
-        md[i] = state[i];
+    // 输出前 32 字节 (4个 ulong)
+    for (int j = 0; j < 4; j++) {
+        store_u64_le(&md[j * 8], st[j]);
     }
 }
 

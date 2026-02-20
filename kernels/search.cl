@@ -39,11 +39,14 @@ void derive_address_from_entropy(const uchar entropy[32], uchar address[20]) {
     ushort words[24];
     entropy_to_mnemonic(entropy, words);
     
-    // 2. 构建 local_mnemonic_t
+    // 2. 构建 local_mnemonic_t (使用 ulong 指针批量复制)
     local_mnemonic_t mn;
-    for (int i = 0; i < 24; i++) {
-        mn.words[i] = words[i];
-    }
+    // 24 * 2 = 48 bytes = 6 ulongs
+    ulong* mn_words = (ulong*)mn.words;
+    ulong* src_words = (ulong*)words;
+    mn_words[0] = src_words[0]; mn_words[1] = src_words[1];
+    mn_words[2] = src_words[2]; mn_words[3] = src_words[3];
+    mn_words[4] = src_words[4]; mn_words[5] = src_words[5];
     
     // 3. 助记词 -> 私钥 (BIP39 + BIP32)
     uchar private_key[32];
@@ -57,10 +60,10 @@ void derive_address_from_entropy(const uchar entropy[32], uchar address[20]) {
     uchar hash[32];
     keccak256(public_key + 1, 64, hash);
     
-    // 6. 取后 20 字节作为以太坊地址
-    for (int i = 0; i < 20; i++) {
-        address[i] = hash[i + 12];
-    }
+    // 6. 取后 20 字节作为以太坊地址 (使用 ulong + uint 批量复制)
+    *((ulong*)address) = *((ulong*)(hash + 12));
+    *((ulong*)(address + 8)) = *((ulong*)(hash + 20));
+    *((uint*)(address + 16)) = *((uint*)(hash + 28));
 }
 
 // 主搜索内核
@@ -72,11 +75,11 @@ __kernel void search_kernel(
     uint tid = get_global_id(0);
     if (tid >= config->num_threads) return;
     
-    // 复制基础熵到本地内存
+    // 复制基础熵到本地内存 (使用 ulong 指针批量复制)
     uchar local_entropy[32];
-    for (int i = 0; i < 32; i++) {
-        local_entropy[i] = config->base_entropy[i];
-    }
+    __constant ulong* src = (__constant ulong*)config->base_entropy;
+    ulong* dst = (ulong*)local_entropy;
+    dst[0] = src[0]; dst[1] = src[1]; dst[2] = src[2]; dst[3] = src[3];
     
     // 设置本线程的起始偏移
     // 每个线程从 tid 步进开始，步长为 num_threads
@@ -101,18 +104,17 @@ __kernel void search_kernel(
             // 原子操作尝试设置标志
             int old_val = atomic_cmpxchg(g_found_flag, 0, 1);
             if (old_val == 0) {
-                // 保存结果 - 从熵重新生成助记词
-                ushort words[24];
-                entropy_to_mnemonic(local_entropy, words);
-                
                 result->found = 1;
-                // 保存熵而不是单词索引，让 Rust 端生成正确的助记词
-                for (int i = 0; i < 32; i++) {
-                    result->result_entropy[i] = local_entropy[i];
-                }
-                for (int i = 0; i < 20; i++) {
-                    result->eth_address[i] = address[i];
-                }
+                // 保存熵 (使用 ulong 指针批量复制)
+                ulong* result_entropy = (ulong*)result->result_entropy;
+                result_entropy[0] = dst[0]; result_entropy[1] = dst[1];
+                result_entropy[2] = dst[2]; result_entropy[3] = dst[3];
+                
+                // 保存地址 (使用 ulong + uint 批量复制)
+                *((ulong*)result->eth_address) = *((ulong*)address);
+                *((ulong*)(result->eth_address + 8)) = *((ulong*)(address + 8));
+                *((uint*)(result->eth_address + 16)) = *((uint*)(address + 16));
+                
                 result->found_by_thread = tid;
             }
             break;

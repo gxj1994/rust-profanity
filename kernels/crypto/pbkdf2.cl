@@ -15,14 +15,14 @@ void pbkdf2_hmac_sha512_block(
     uchar output[64]
 ) {
     // U_1 = HMAC-SHA512(Password, Salt || INT_32_BE(block_num))
-    uchar salt_block[256];  // 假设 salt_len + 4 < 256
-    // 初始化数组
-    for (uint i = 0; i < 256; i++) {
-        salt_block[i] = 0;
-    }
+    // 使用固定大小数组，避免大数组初始化开销
+    uchar salt_block[128];  // BIP39 salt "mnemonic" (8字节) + 4 = 12 < 128
+    
+    // 直接复制 salt，不需要清零整个数组
     for (uint i = 0; i < salt_len; i++) {
         salt_block[i] = salt[i];
     }
+    // 直接添加 block_num (大端序)
     salt_block[salt_len] = (uchar)(block_num >> 24);
     salt_block[salt_len + 1] = (uchar)(block_num >> 16);
     salt_block[salt_len + 2] = (uchar)(block_num >> 8);
@@ -31,18 +31,15 @@ void pbkdf2_hmac_sha512_block(
     uchar u[64];
     hmac_sha512(password, password_len, salt_block, salt_len + 4, u);
     
-    // T = U_1
+    // T = U_1 (直接复制到 output)
     for (uint i = 0; i < 64; i++) {
         output[i] = u[i];
     }
     
     // U_2 到 U_iterations
     for (uint iter = 1; iter < iterations; iter++) {
-        uchar prev_u[64];
-        for (uint i = 0; i < 64; i++) {
-            prev_u[i] = u[i];
-        }
-        hmac_sha512(password, password_len, prev_u, 64, u);
+        // 直接使用 u 作为输入和输出，避免 prev_u 拷贝
+        hmac_sha512(password, password_len, u, 64, u);
         
         // T ^= U_i
         for (uint i = 0; i < 64; i++) {
