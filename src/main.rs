@@ -180,17 +180,22 @@ fn main() -> anyhow::Result<()> {
     info!("开始轮询等待结果...");
     let mut found = false;
     let mut poll_count = 0;
+    let timeout_enabled = args.timeout > 0;
+    let timeout_secs = args.timeout;
     
     loop {
-        // 检查是否找到
-        if search_kernel.check_found()? {
-            found = true;
+        let elapsed_secs = start_time.elapsed().as_secs();
+        let is_timeout = timeout_enabled && elapsed_secs >= timeout_secs;
+        
+        // 检查超时（优先于找到结果，强制终止）
+        if is_timeout {
+            info!("搜索超时 ({} 秒)", timeout_secs);
             break;
         }
         
-        // 检查超时
-        if args.timeout > 0 && start_time.elapsed().as_secs() >= args.timeout {
-            info!("搜索超时 ({} 秒)", args.timeout);
+        // 检查是否找到
+        if search_kernel.check_found()? {
+            found = true;
             break;
         }
         
@@ -215,8 +220,20 @@ fn main() -> anyhow::Result<()> {
         sleep(Duration::from_millis(args.poll_interval));
     }
     
-    // 8. 读取结果
-    let result = search_kernel.read_result()?;
+    // 8. 读取结果（超时后使用非阻塞方式）
+    let is_timeout = timeout_enabled && start_time.elapsed().as_secs() >= timeout_secs;
+    let result = if !found && is_timeout {
+        // 超时情况下，尝试非阻塞读取，如果失败则使用默认值
+        search_kernel.read_result_nonblock().unwrap_or_else(|_| SearchResult {
+            found: 0,
+            result_entropy: [0u8; 32],
+            eth_address: [0u8; 20],
+            found_by_thread: 0,
+            total_checked: 0,
+        })
+    } else {
+        search_kernel.read_result()?
+    };
     let elapsed = start_time.elapsed();
     
     // 9. 输出结果
@@ -241,6 +258,8 @@ fn main() -> anyhow::Result<()> {
             .expect("从熵生成助记词失败");
         println!("助记词: {}", mnemonic);
         println!("找到线程: {}", result.found_by_thread);
+    } else if !found && is_timeout {
+        println!("✗ 搜索超时 ({} 秒) - 强制终止", timeout_secs);
     } else {
         println!("✗ 未找到符合条件的地址");
     }
