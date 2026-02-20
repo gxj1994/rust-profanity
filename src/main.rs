@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use std::thread::sleep;
 
 use rust_profanity::{
-    config::*,
+    config::{*, parse_leading_zeros_exact_condition},
     mnemonic::Mnemonic,
     opencl::{OpenCLContext, SearchKernel},
 };
@@ -30,9 +30,13 @@ struct Args {
     #[arg(long, group = "condition")]
     suffix: Option<String>,
     
-    /// 前导零个数
+    /// 前导零个数 (至少)
     #[arg(long, group = "condition")]
     leading_zeros: Option<u32>,
+    
+    /// 前导零个数 (精确匹配)
+    #[arg(long, group = "condition")]
+    leading_zeros_exact: Option<u32>,
     
     /// GPU 线程数
     #[arg(short, long, default_value = "1024")]
@@ -60,8 +64,11 @@ fn parse_condition(args: &Args) -> anyhow::Result<u64> {
         info!("搜索条件: 后缀匹配 {}", suffix);
         parse_suffix_condition(suffix)
     } else if let Some(zeros) = args.leading_zeros {
-        info!("搜索条件: 前导零 {}", zeros);
+        info!("搜索条件: 前导零至少 {} 个", zeros);
         parse_leading_zeros_condition(zeros)
+    } else if let Some(zeros) = args.leading_zeros_exact {
+        info!("搜索条件: 前导零精确 {} 个", zeros);
+        parse_leading_zeros_exact_condition(zeros)
     } else {
         // 默认搜索前缀 8888
         info!("搜索条件: 默认前缀匹配 8888");
@@ -137,10 +144,11 @@ fn main() -> anyhow::Result<()> {
     info!("启动 GPU以太坊靓号地址搜索系统");
     info!("参数: {:?}", args);
     
-    // 1. 生成随机助记词种子
-    info!("生成随机助记词种子...");
+    // 1. 生成随机熵种子
+    info!("生成随机熵种子...");
     let base_mnemonic = Mnemonic::generate_random()?;
-    info!("基础助记词: {}", base_mnemonic);
+    let (base_entropy, _) = base_mnemonic.to_entropy();
+    info!("搜索空间: {} 个线程从随机熵开始并行遍历", args.threads);
     
     // 2. 解析搜索条件
     let condition = parse_condition(&args)?;
@@ -155,13 +163,11 @@ fn main() -> anyhow::Result<()> {
     info!("加载 OpenCL 内核...");
     // 使用完整版内核 (包含完整加密实现)
     let kernel_source = load_kernel_source()?;
-    // 使用简化版内核 (用于测试)
-    // let kernel_source = load_simple_kernel_source()?;
     let search_kernel = SearchKernel::new(&ctx, &kernel_source)?;
     
     // 5. 准备配置数据
-    // 从助记词重建熵，传递给 GPU
-    let (base_entropy, checksum_valid) = base_mnemonic.to_entropy();
+    // 验证助记词校验和
+    let (_, checksum_valid) = base_mnemonic.to_entropy();
     if !checksum_valid {
         log::warn!("基础助记词校验和验证失败，继续执行...");
     }
@@ -198,8 +204,18 @@ fn main() -> anyhow::Result<()> {
         // 显示进度
         poll_count += 1;
         if poll_count % 10 == 0 {
-            let elapsed = start_time.elapsed().as_secs();
-            info!("搜索中... 已运行 {} 秒", elapsed);
+            let elapsed = start_time.elapsed().as_secs_f64();
+            let result = search_kernel.read_result().ok();
+            if let Some(r) = result {
+                let checked = r.total_checked;
+                let speed = if elapsed > 0.0 { checked as f64 / elapsed } else { 0.0 };
+                info!(
+                    "搜索中... 已运行 {:.1} 秒 | 已检查 {} 个地址 | 速度 {:.0} 地址/秒",
+                    elapsed, checked, speed
+                );
+            } else {
+                info!("搜索中... 已运行 {:.1} 秒", elapsed);
+            }
         }
         
         // 等待一段时间再检查
@@ -213,6 +229,14 @@ fn main() -> anyhow::Result<()> {
     // 9. 输出结果
     println!();
     println!("========================================");
+    
+    // 计算统计信息
+    let total_checked = result.total_checked;
+    let speed = if elapsed.as_secs_f64() > 0.0 {
+        total_checked as f64 / elapsed.as_secs_f64()
+    } else {
+        0.0
+    };
     
     if found && result.found != 0 {
         println!("✓ 找到符合条件的地址!");
@@ -229,6 +253,7 @@ fn main() -> anyhow::Result<()> {
     }
     
     println!("搜索时间: {:.2} 秒", elapsed.as_secs_f64());
+    println!("检查地址数: {} | 平均速度: {:.0} 地址/秒", total_checked, speed);
     println!("========================================");
     
     Ok(())
@@ -246,6 +271,7 @@ mod tests {
             prefix: Some("8888".to_string()),
             suffix: None,
             leading_zeros: None,
+            leading_zeros_exact: None,
             threads: 1024,
             work_group_size: 256,
             poll_interval: 100,

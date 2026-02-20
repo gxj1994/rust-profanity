@@ -19,6 +19,7 @@ typedef struct {
     uchar result_entropy[32];  // 找到的熵 (32字节)，由 Rust 端转换为助记词
     uchar eth_address[20];
     uint found_by_thread;
+    ulong total_checked;       // 总共检查的地址数量 (所有线程累加)
 } search_result_t;
 
 // 本地助记词结构 (与 mnemonic.cl 中的定义保持一致)
@@ -87,8 +88,10 @@ __kernel void search_kernel(
     }
     
     uint counter = 0;
+    ulong local_checked = 0;
     
     while (!(*g_found_flag)) {
+        local_checked++;
         // 从熵生成以太坊地址 (自动包含正确的 BIP39 校验和)
         uchar address[20];
         derive_address_from_entropy(local_entropy, address);
@@ -120,9 +123,17 @@ __kernel void search_kernel(
             break;  // 本线程搜索空间耗尽
         }
         
-        // 定期检测全局标志
+        // 定期检测全局标志并更新统计
         if ((++counter & (config->check_interval - 1)) == 0) {
             if (*g_found_flag) break;
+            // 原子累加本线程检查的地址数
+            atom_add(&result->total_checked, local_checked);
+            local_checked = 0;
         }
+    }
+    
+    // 最后累加剩余的计数
+    if (local_checked > 0) {
+        atom_add(&result->total_checked, local_checked);
     }
 }

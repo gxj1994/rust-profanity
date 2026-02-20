@@ -42,6 +42,8 @@ pub struct SearchResult {
     pub eth_address: [u8; 20],
     /// 由哪个线程找到 - 对应 OpenCL uint
     pub found_by_thread: u32,
+    /// 总共检查的地址数量 - 对应 OpenCL ulong
+    pub total_checked: u64,
 }
 
 /// 条件类型
@@ -53,8 +55,10 @@ pub enum ConditionType {
     Suffix = 0x02,
     /// 模式匹配
     Pattern = 0x03,
-    /// 前导零个数
+    /// 前导零个数 (至少)
     Leading = 0x04,
+    /// 前导零个数 (精确匹配)
+    LeadingExact = 0x05,
 }
 
 impl ConditionType {
@@ -104,12 +108,20 @@ pub fn parse_suffix_condition(suffix: &str) -> anyhow::Result<u64> {
     Ok(ConditionType::Suffix.encode(param))
 }
 
-/// 解析前导零条件
+/// 解析前导零条件 (至少)
 pub fn parse_leading_zeros_condition(zeros: u32) -> anyhow::Result<u64> {
     if zeros > 20 {
         anyhow::bail!("Leading zeros cannot exceed 20");
     }
     Ok(ConditionType::Leading.encode(zeros as u64))
+}
+
+/// 解析前导零条件 (精确匹配)
+pub fn parse_leading_zeros_exact_condition(zeros: u32) -> anyhow::Result<u64> {
+    if zeros > 20 {
+        anyhow::bail!("Leading zeros cannot exceed 20");
+    }
+    Ok(ConditionType::LeadingExact.encode(zeros as u64))
 }
 
 #[cfg(test)]

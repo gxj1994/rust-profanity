@@ -8,6 +8,7 @@
 #define COND_SUFFIX  0x02
 #define COND_PATTERN 0x03
 #define COND_LEADING 0x04
+#define COND_LEADING_EXACT 0x05  // 精确匹配前导零个数
 
 // 比较前缀
 // param: 要匹配的前缀字节 (最多6字节)
@@ -65,12 +66,17 @@ bool compare_suffix(const uchar address[20], ulong param) {
     return (addr_suffix & mask) == param;
 }
 
-// 统计前导零字节数
+// 统计前导零十六进制字符数
+// 每个字节 = 2 个十六进制字符
 uint count_leading_zeros(const uchar address[20]) {
     uint count = 0;
     for (int i = 0; i < 20; i++) {
-        if (address[i] == 0) {
-            count++;
+        uchar byte = address[i];
+        if (byte == 0) {
+            count += 2;  // 00 = 2 个零字符
+        } else if ((byte & 0xF0) == 0) {
+            count += 1;  // 0x = 1 个零字符 (高 4 位为 0)
+            break;
         } else {
             break;
         }
@@ -90,6 +96,8 @@ bool check_condition(const uchar address[20], ulong condition) {
             return compare_suffix(address, param);
         case COND_LEADING:
             return count_leading_zeros(address) >= param;
+        case COND_LEADING_EXACT:
+            return count_leading_zeros(address) == param;
         default:
             return false;
     }
