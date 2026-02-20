@@ -35,8 +35,9 @@ impl SearchConfig {
 pub struct SearchResult {
     /// 是否找到 (0/1) - 对应 OpenCL int
     pub found: i32,
-    /// 找到的助记词 - 对应 OpenCL ushort[24]
-    pub result_mnemonic: [u16; 24],
+    /// 找到的熵 (32字节) - 对应 OpenCL uchar[32]
+    /// 由 Rust 端转换为助记词，确保校验和正确
+    pub result_entropy: [u8; 32],
     /// 以太坊地址 (20字节) - 对应 OpenCL uchar[20]
     pub eth_address: [u8; 20],
     /// 由哪个线程找到 - 对应 OpenCL uint
@@ -136,9 +137,9 @@ mod tests {
         println!("SearchConfig size: {}", config_size);
         assert!(config_size >= 48, "SearchConfig too small");
 
-        // OpenCL: typedef struct { int; ushort[24]; uchar[20]; uint; } = 4 + 48 + 20 + 4 = 76 (可能有填充)
+        // OpenCL: typedef struct { int; uchar[32]; uchar[20]; uint; } = 4 + 32 + 20 + 4 = 60 (可能有填充)
         let result_size = std::mem::size_of::<SearchResult>();
         println!("SearchResult size: {}", result_size);
-        assert!(result_size >= 76, "SearchResult too small");
+        assert!(result_size >= 60, "SearchResult too small");
     }
 }

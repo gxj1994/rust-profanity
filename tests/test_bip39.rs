@@ -212,3 +212,125 @@ mod tests {
         }
     }
 }
+
+#[test]
+fn test_verify_specific_mnemonic() {
+    use rust_profanity::mnemonic::Mnemonic;
+    
+    let mnemonic_str = "jealous pink crazy spice chest sugar stove cargo oil museum jungle clap elite forest please primary profit buffalo machine hundred neglect false liberty accident";
+    
+    // 尝试解析
+    let mnemonic = Mnemonic::from_string(mnemonic_str).expect("解析助记词失败");
+    
+    println!("助记词解析成功!");
+    println!("校验和有效: {}", mnemonic.validate_checksum());
+    
+    // 验证每个单词的索引
+    let words: Vec<&str> = mnemonic_str.split_whitespace().collect();
+    for (i, word) in words.iter().enumerate() {
+        let idx = mnemonic.words[i];
+        println!("单词 {}: '{}' -> 索引 {}", i, word, idx);
+    }
+}
+
+#[test]
+fn test_entropy_to_mnemonic_roundtrip() {
+    use rust_profanity::mnemonic::Mnemonic;
+    use rand::RngCore;
+    
+    // 测试10个随机熵值
+    for _ in 0..10 {
+        let mut entropy = [0u8; 32];
+        rand::thread_rng().fill_bytes(&mut entropy);
+        
+        let mnemonic = Mnemonic::from_entropy(&entropy).unwrap();
+        let (recovered_entropy, valid) = mnemonic.to_entropy();
+        
+        println!("原始熵: {:?}", hex::encode(entropy));
+        println!("恢复熵: {:?}", hex::encode(recovered_entropy));
+        println!("校验和有效: {}", valid);
+        println!("熵匹配: {}", entropy == recovered_entropy);
+        println!("---");
+        
+        assert!(valid, "校验和应该有效");
+        assert_eq!(entropy, recovered_entropy, "熵应该匹配");
+    }
+}
+
+#[test]
+fn test_opencl_sha256() {
+    use ocl::{ProQue, Buffer, MemFlags};
+    use sha2::{Sha256, Digest};
+    
+    // 测试数据: 32字节熵
+    let entropy: [u8; 32] = [
+        0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+        0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
+        0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17,
+        0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f,
+    ];
+    
+    // Rust SHA256
+    let mut rust_hasher = Sha256::new();
+    rust_hasher.update(&entropy);
+    let rust_hash = rust_hasher.finalize();
+    println!("Rust SHA256: {:?}", hex::encode(rust_hash));
+    
+    // OpenCL SHA256
+    let kernel_source = include_str!("../kernels/crypto/sha256.cl");
+    
+    let proque = match ProQue::builder()
+        .src(kernel_source)
+        .dims(1)
+        .build() {
+        Ok(p) => p,
+        Err(_) => {
+            println!("OpenCL 不可用，跳过测试");
+            return;
+        }
+    };
+    
+    let input_buffer = Buffer::<u8>::builder()
+        .queue(proque.queue().clone())
+        .flags(MemFlags::READ_ONLY)
+        .len(32)
+        .copy_host_slice(&entropy)
+        .build().unwrap();
+    
+    let output_buffer = Buffer::<u8>::builder()
+        .queue(proque.queue().clone())
+        .flags(MemFlags::WRITE_ONLY)
+        .len(32)
+        .build().unwrap();
+    
+    let kernel = proque.kernel_builder("sha256")
+        .arg(&input_buffer)
+        .arg(32u32)
+        .arg(&output_buffer)
+        .build().unwrap();
+    
+    unsafe { kernel.enq().unwrap(); }
+    
+    let mut cl_hash = vec![0u8; 32];
+    output_buffer.read(&mut cl_hash).enq().unwrap();
+    
+    println!("OpenCL SHA256: {:?}", hex::encode(&cl_hash));
+    
+    assert_eq!(rust_hash.as_slice(), &cl_hash, "SHA256 结果不匹配!");
+}
+
+#[test]
+fn test_verify_found_mnemonic() {
+    use rust_profanity::mnemonic::Mnemonic;
+    
+    // 验证刚找到的助记词
+    let mnemonic_str = "soup salt butter cute spoon dentist orchard frog rose health brick mixture year patrol claim escape useful dwarf elegant response cube kiss occur online";
+    
+    let mnemonic = Mnemonic::from_string(mnemonic_str).expect("解析助记词失败");
+    let valid = mnemonic.validate_checksum();
+    
+    println!("助记词: {}", mnemonic_str);
+    println!("校验和有效: {}", valid);
+    
+    assert!(valid, "找到的助记词校验和必须有效");
+}

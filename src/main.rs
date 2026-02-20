@@ -218,7 +218,11 @@ fn main() -> anyhow::Result<()> {
         println!("✓ 找到符合条件的地址!");
         println!("========================================");
         println!("以太坊地址: 0x{}", hex::encode(result.eth_address));
-        println!("助记词: {}", format_mnemonic(&result.result_mnemonic));
+        
+        // 从熵生成助记词，确保校验和正确
+        let mnemonic = Mnemonic::from_entropy(&result.result_entropy)
+            .expect("从熵生成助记词失败");
+        println!("助记词: {}", mnemonic);
         println!("找到线程: {}", result.found_by_thread);
     } else {
         println!("✗ 未找到符合条件的地址");
@@ -230,23 +234,7 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// 格式化助记词显示
-fn format_mnemonic(words: &[u16; 24]) -> String {
-    use rust_profanity::mnemonic::BIP39_WORDLIST;
-    
-    words
-        .iter()
-        .map(|&idx| {
-            let idx_usize = idx as usize;
-            if idx_usize < BIP39_WORDLIST.len() {
-                BIP39_WORDLIST[idx_usize]
-            } else {
-                "unknown"
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
-}
+
 
 #[cfg(test)]
 mod tests {

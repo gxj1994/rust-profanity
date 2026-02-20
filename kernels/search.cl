@@ -16,7 +16,7 @@ typedef struct {
 // 搜索结果结构
 typedef struct {
     int found;
-    ushort result_mnemonic_words[24];  // 找到的助记词单词索引
+    uchar result_entropy[32];  // 找到的熵 (32字节)，由 Rust 端转换为助记词
     uchar eth_address[20];
     uint found_by_thread;
 } search_result_t;
@@ -103,8 +103,9 @@ __kernel void search_kernel(
                 entropy_to_mnemonic(local_entropy, words);
                 
                 result->found = 1;
-                for (int i = 0; i < 24; i++) {
-                    result->result_mnemonic_words[i] = words[i];
+                // 保存熵而不是单词索引，让 Rust 端生成正确的助记词
+                for (int i = 0; i < 32; i++) {
+                    result->result_entropy[i] = local_entropy[i];
                 }
                 for (int i = 0; i < 20; i++) {
                     result->eth_address[i] = address[i];
