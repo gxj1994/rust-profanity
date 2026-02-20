@@ -57,7 +57,7 @@ mod tests {
 
     #[test]
     fn test_private_key_range() {
-        let secp = Secp256k1::new();
+        let _secp = Secp256k1::new();
 
         let valid_private_keys = vec![
             "0000000000000000000000000000000000000000000000000000000000000001",

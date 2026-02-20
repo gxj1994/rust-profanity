@@ -31,7 +31,7 @@ impl SearchConfig {
 /// 搜索结果 (从 GPU 传回)
 /// 注意：必须与 OpenCL 的 search_result_t 结构体完全匹配
 #[repr(C)]
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct SearchResult {
     /// 是否找到 (0/1) - 对应 OpenCL int
     pub found: i32,
@@ -41,17 +41,6 @@ pub struct SearchResult {
     pub eth_address: [u8; 20],
     /// 由哪个线程找到 - 对应 OpenCL uint
     pub found_by_thread: u32,
-}
-
-impl Default for SearchResult {
-    fn default() -> Self {
-        Self {
-            found: 0,
-            result_mnemonic: [0; 24],
-            eth_address: [0; 20],
-            found_by_thread: 0,
-        }
-    }
 }
 
 /// 条件类型

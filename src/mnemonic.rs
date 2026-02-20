@@ -27,7 +27,7 @@ impl Mnemonic {
     pub fn from_entropy(entropy: &[u8; 32]) -> anyhow::Result<Self> {
         // 计算校验和: SHA256 的前 8 位 (256/32 = 8)
         let hash = Sha256::digest(entropy);
-        let checksum_bits = hash[0] >> (8 - 8); // 取前8位
+        let checksum_bits = hash[0]; // 取前8位
         
         // 组合: 256位熵 + 8位校验和 = 264位
         // 将数据视为大端序的位流
@@ -37,7 +37,7 @@ impl Mnemonic {
         
         // 提取24个11位索引
         let mut words = [0u16; 24];
-        for i in 0..24 {
+        for (i, word) in words.iter_mut().enumerate() {
             let bit_offset = i * 11;
             
             // 读取11位索引 (可能跨越2-3个字节)
@@ -52,7 +52,7 @@ impl Mnemonic {
                 }
             }
             
-            words[i] = idx & 0x7FF;
+            *word = idx & 0x7FF;
         }
         
         Ok(Self { words })
@@ -78,7 +78,7 @@ impl Mnemonic {
     }
     
     /// 转换为字符串
-    pub fn to_string(&self) -> String {
+    pub fn as_phrase(&self) -> String {
         self.words
             .iter()
             .map(|&idx| {
@@ -136,7 +136,7 @@ impl Mnemonic {
         
         // 计算期望的校验和
         let hash = Sha256::digest(entropy);
-        let expected_checksum = hash[0] >> (8 - 8); // 前8位
+        let expected_checksum = hash[0];
         
         checksum == expected_checksum
     }
@@ -167,8 +167,8 @@ impl Mnemonic {
         let checksum = all_bits[32];
         
         // 验证校验和
-        let hash = Sha256::digest(&entropy);
-        let expected_checksum = hash[0] >> (8 - 8);
+        let hash = Sha256::digest(entropy);
+        let expected_checksum = hash[0];
         let valid = checksum == expected_checksum;
         
         (entropy, valid)
@@ -177,7 +177,7 @@ impl Mnemonic {
 
 impl std::fmt::Display for Mnemonic {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.to_string())
+        write!(f, "{}", self.as_phrase())
     }
 }
 
@@ -228,7 +228,7 @@ mod tests {
             0x7f, 0x7f, 0x7f, 0x7f, 0x7f, 0x7f, 0x7f, 0x7f,
         ];
         let mnemonic2 = Mnemonic::from_entropy(&entropy2).unwrap();
-        println!("Vector 2 mnemonic: {}", mnemonic2.to_string());
+        println!("Vector 2 mnemonic: {}", mnemonic2);
         assert!(mnemonic2.validate_checksum(), "Vector 2 checksum failed");
     }
     

@@ -8,7 +8,7 @@ void entropy_to_mnemonic(const uchar entropy[32], ushort words[24]) {
     // 计算校验和: SHA256 的前 8 位 (256/32 = 8)
     uchar hash[32];
     sha256(entropy, 32, hash);
-    uchar checksum_bits = hash[0] >> (8 - 8); // 取前8位
+    uchar checksum_bits = hash[0]; // 取前8位
     
     // 组合: 256位熵 + 8位校验和 = 264位
     // 将数据视为大端序的位流
@@ -73,7 +73,7 @@ bool mnemonic_to_entropy(const ushort words[24], uchar entropy[32]) {
     // 计算期望的校验和
     uchar hash[32];
     sha256(entropy, 32, hash);
-    uchar expected_checksum = hash[0] >> (8 - 8); // 前8位
+    uchar expected_checksum = hash[0]; // 前8位
     
     return checksum == expected_checksum;
 }

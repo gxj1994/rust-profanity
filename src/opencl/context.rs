@@ -49,7 +49,7 @@ impl OpenCLContext {
                     || device_name.to_lowercase().contains("radeon");
                 
                 if is_gpu {
-                    selected_platform = Some(platform.clone());
+                    selected_platform = Some(*platform);
                     selected_device = Some(device);
                     break;
                 }
@@ -66,8 +66,8 @@ impl OpenCLContext {
             (p, d)
         } else {
             info!("No GPU found, using first available device");
-            let p = platforms[0].clone();
-            let devices = Device::list_all(&p)?;
+            let p = platforms[0];
+            let devices = Device::list_all(p)?;
             if devices.is_empty() {
                 anyhow::bail!("No OpenCL devices found");
             }
@@ -79,12 +79,12 @@ impl OpenCLContext {
         
         // 创建上下文
         let context = Context::builder()
-            .platform(platform.clone())
-            .devices(device.clone())
+            .platform(platform)
+            .devices(device)
             .build()?;
         
         // 创建命令队列
-        let queue = Queue::new(&context, device.clone(), None)?;
+        let queue = Queue::new(&context, device, None)?;
         
         Ok(Self {
             platform,

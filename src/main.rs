@@ -217,7 +217,7 @@ fn main() -> anyhow::Result<()> {
     if found && result.found != 0 {
         println!("✓ 找到符合条件的地址!");
         println!("========================================");
-        println!("以太坊地址: 0x{}", hex::encode(&result.eth_address));
+        println!("以太坊地址: 0x{}", hex::encode(result.eth_address));
         println!("助记词: {}", format_mnemonic(&result.result_mnemonic));
         println!("找到线程: {}", result.found_by_thread);
     } else {

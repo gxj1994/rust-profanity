@@ -62,8 +62,6 @@ void derive_address_from_entropy(const uchar entropy[32], uchar address[20]) {
     }
 }
 
-
-
 // 主搜索内核
 __kernel void search_kernel(
     __constant search_config_t* config,

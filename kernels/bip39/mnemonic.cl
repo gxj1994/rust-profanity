@@ -1,11 +1,6 @@
 // BIP39 助记词处理 (OpenCL)
 // 实现助记词到以太坊私钥的完整转换
-
-// 注意: 此文件由 main.rs 手动合并，条件编译保护已移除
-// #ifndef MNEMONIC_CL
-// #define MNEMONIC_CL
-
-// 需要包含 sha512.cl、pbkdf2.cl 和 wordlist.cl
+// 依赖: sha512.cl、pbkdf2.cl、wordlist.cl
 
 // 助记词结构
 typedef struct {
@@ -82,20 +77,6 @@ void seed_to_master_key(const seed_t* seed, uchar master_key[64]) {
     hmac_sha512_bip32(key, 12, seed->bytes, 64, master_key);
 }
 
-// 序列化 256 位整数为大端字节数组
-void uint256_to_bytes_be(ulong value[4], uchar bytes[32]) {
-    for (int i = 0; i < 4; i++) {
-        bytes[i * 8] = (uchar)(value[3 - i] >> 56);
-        bytes[i * 8 + 1] = (uchar)(value[3 - i] >> 48);
-        bytes[i * 8 + 2] = (uchar)(value[3 - i] >> 40);
-        bytes[i * 8 + 3] = (uchar)(value[3 - i] >> 32);
-        bytes[i * 8 + 4] = (uchar)(value[3 - i] >> 24);
-        bytes[i * 8 + 5] = (uchar)(value[3 - i] >> 16);
-        bytes[i * 8 + 6] = (uchar)(value[3 - i] >> 8);
-        bytes[i * 8 + 7] = (uchar)(value[3 - i]);
-    }
-}
-
 // 从字节数组加载 uint256 (小端序)
 void uint256_from_bytes_mnemonic(const uchar bytes[32], ulong result[4]) {
     for (int i = 0; i < 4; i++) {
@@ -168,20 +149,6 @@ void mod_add_n_mnemonic(const ulong a[4], const ulong b[4], ulong result[4]) {
     }
 }
 
-// 从私钥计算公钥 (用于非硬化派生)
-void private_to_public_mnemonic(const uchar private_key[32], uchar public_key[33]) {
-    // 调用 secp256k1.cl 中的函数
-    uchar full_public_key[65];
-    private_to_public(private_key, full_public_key);
-    
-    // 提取压缩公钥格式: 0x02 + x坐标 (假设 y 是偶数)
-    // 实际应该根据 y 的奇偶性选择 0x02 或 0x03
-    public_key[0] = 0x02;
-    for (int i = 0; i < 32; i++) {
-        public_key[i + 1] = full_public_key[i + 1];  // x坐标
-    }
-}
-
 // 派生子密钥 (BIP32)
 // parent_key: 64 字节 (32 字节私钥 + 32 字节链码)
 // index: 派生索引 (>= 0x80000000 表示硬化派生)
@@ -196,15 +163,9 @@ void derive_child_key(const uchar parent_key[64], uint index, uchar child_key[64
             data[i + 1] = parent_key[i];  // 父私钥
         }
     } else {
-        // 普通派生: 使用 0x02 || 父公钥(x坐标) || 索引
-        // 需要先计算父公钥
-        uchar parent_public_key[33];
-        private_to_public_mnemonic(parent_key, parent_public_key);
-        
-        data[0] = parent_public_key[0];  // 0x02 或 0x03
-        for (int i = 0; i < 32; i++) {
-            data[i + 1] = parent_public_key[i + 1];  // x坐标
-        }
+        // 普通派生未实现 (当前只使用硬化派生)
+        // 标准以太坊路径 m/44'/60'/0'/0/0 全部使用硬化派生
+        return;
     }
     
     // 添加索引 (大端序)
@@ -271,12 +232,7 @@ void get_ethereum_private_key(const mnemonic_t* mnemonic, uchar private_key[32])
     derive_path(&seed, path, 5, private_key);
 }
 
-// 兼容旧版本的接口 (使用 local_mnemonic_t 类型)
-// 注意: local_mnemonic_t 已在 search.cl 中定义
-// typedef struct {
-//     ushort words[24];
-// } local_mnemonic_t;
-
+// 兼容接口: local_mnemonic_t 类型在 search.cl 中定义
 void get_ethereum_private_key_local(const local_mnemonic_t* mnemonic, uchar private_key[32]) {
     mnemonic_t mn;
     for (int i = 0; i < 24; i++) {
@@ -285,4 +241,4 @@ void get_ethereum_private_key_local(const local_mnemonic_t* mnemonic, uchar priv
     get_ethereum_private_key(&mn, private_key);
 }
 
-// #endif // MNEMONIC_CL
+

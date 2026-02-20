@@ -114,8 +114,8 @@ mod tests {
     #[test]
     fn test_edge_cases() {
         let mut address = [0u8; 20];
-        for i in 0..6 {
-            address[i] = 0xAB;
+        for byte in address.iter_mut().take(6) {
+            *byte = 0xAB;
         }
 
         let long_prefix = [0xABu8; 6];

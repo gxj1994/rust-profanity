@@ -28,8 +28,7 @@ fn load_kernel_source() -> String {
 
 fn rust_mnemonic_to_seed(mnemonic_phrase: &str) -> [u8; 64] {
     let mnemonic = Mnemonic::parse_in(Language::English, mnemonic_phrase).unwrap();
-    let seed = mnemonic.to_seed("");  // 无密码短语
-    seed
+    mnemonic.to_seed("")  // 无密码短语
 }
 
 fn opencl_mnemonic_to_seed(word_indices: &[u16; 24]) -> ocl::Result<[u8; 64]> {
@@ -123,7 +122,7 @@ mod tests {
             
             // 打印实际生成的种子，用于验证
             println!("助记词: {}", mnemonic);
-            println!("生成的种子: {}", hex::encode(&rust_seed));
+            println!("生成的种子: {}", hex::encode(rust_seed));
             println!("期望的种子: {}", expected_seed_hex);
             
             // 只验证种子不为零且长度正确
