@@ -90,10 +90,10 @@ cargo test
 ========================================
 ✓ 找到符合条件的地址!
 ========================================
-以太坊地址: 0x00a498a635288693eab4a14717e648728979dbc5
-助记词: web toddler scare accuse cupboard ritual scout velvet favorite abuse uncle patrol adjust destroy gold say shed history utility various pluck increase script couple
-找到线程: 0
-搜索时间: 1.44 秒
+以太坊地址: 0x00cb1e37fd7c9aff6c17122fdcc77394fa707bdd
+助记词: ritual rely sell intact purity pulse tail shine proud legend gauge leopard gap oval cave skate fitness elephant garbage wet select occur vanish gentle
+找到线程: 18
+搜索时间: 0.27 秒
 ========================================
 ```
 

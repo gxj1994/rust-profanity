@@ -334,3 +334,19 @@ fn test_verify_found_mnemonic() {
     
     assert!(valid, "找到的助记词校验和必须有效");
 }
+
+#[test]
+fn test_new_found_mnemonic() {
+    use rust_profanity::mnemonic::Mnemonic;
+    
+    // 验证新生成的助记词
+    let mnemonic_str = "remain orient cycle gesture satoshi finish manage box power judge series camp dog ivory venture news bird goddess switch apology check rain attack else";
+    
+    let mnemonic = Mnemonic::from_string(mnemonic_str).expect("解析失败");
+    let valid = mnemonic.validate_checksum();
+    
+    println!("助记词: {}", mnemonic_str);
+    println!("校验和有效: {}", valid);
+    
+    assert!(valid, "校验和必须有效");
+}
