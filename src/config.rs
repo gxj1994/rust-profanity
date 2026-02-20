@@ -70,17 +70,15 @@ impl ConditionType {
 
 /// 解析前缀条件
 /// 
-/// 将输入字符串解析为十六进制字节序列。
-/// 输入应为十六进制字符（0-9, a-f, A-F），每2个字符表示1个字节。
-/// 
-/// 注意：以太坊地址显示为十六进制字符串，所以要找以"888"开头的地址，
-/// 输入"888"会被解析为字节 0x88 0x88 0x88（共3字节）
+/// 将十六进制字符串解析为字节序列。
+/// 输入应为十六进制字符（0-9, a-f, A-F）。
+/// 每个字符会被重复一次，例如："888" -> "888888" -> [0x88, 0x88, 0x88]
 /// 
 /// # Example
 /// ```
 /// use rust_profanity::parse_prefix_condition;
-/// let condition = parse_prefix_condition("8888").unwrap();
-/// let condition2 = parse_prefix_condition("888").unwrap();
+/// let condition = parse_prefix_condition("8888").unwrap();  // [0x88, 0x88, 0x88, 0x88]
+/// let condition2 = parse_prefix_condition("888").unwrap();  // [0x88, 0x88, 0x88]
 /// ```
 pub fn parse_prefix_condition(prefix: &str) -> anyhow::Result<u64> {
     let hex_str = prefix.trim_start_matches("0x");
@@ -90,15 +88,8 @@ pub fn parse_prefix_condition(prefix: &str) -> anyhow::Result<u64> {
         anyhow::bail!("Prefix must contain only hexadecimal characters (0-9, a-f, A-F)");
     }
     
-    // 将每个十六进制字符解析为半字节(nibble)，然后组合成字节
-    // 例如："888" -> [0x88, 0x88] 是错误的，应该是 [0x88, 0x88, 0x88]？
-    // 实际上："888" 应该被理解为 3 个十六进制数字，每个代表一个完整的字节 0x88
-    // 但这样不合理，因为 0x88 需要2个十六进制字符
-    
-    // 正确的理解：用户输入 "888" 想要匹配地址中的 0x88 0x88 0x88
-    // 但 "888" 只有3个字符，无法直接解析为字节
-    // 方案：将每个字符重复，"8" -> "88"，所以 "888" -> "888888" -> [0x88, 0x88, 0x88]
-    
+    // 将每个字符重复一次，然后解析
+    // 例如："888" -> "888888" -> [0x88, 0x88, 0x88]
     let expanded_hex: String = hex_str.chars()
         .map(|c| format!("{}{}", c, c))
         .collect::<String>();
@@ -106,7 +97,7 @@ pub fn parse_prefix_condition(prefix: &str) -> anyhow::Result<u64> {
     let bytes = hex::decode(&expanded_hex)?;
     
     if bytes.len() > 6 {
-        anyhow::bail!("Prefix too long, max 6 bytes (6 hex characters)");
+        anyhow::bail!("Prefix too long, max 6 characters (6 hex digits)");
     }
     
     let mut param: u64 = 0;
@@ -119,9 +110,9 @@ pub fn parse_prefix_condition(prefix: &str) -> anyhow::Result<u64> {
 
 /// 解析后缀条件
 /// 
-/// 将输入字符串解析为十六进制字节序列。
+/// 将十六进制字符串解析为字节序列。
 /// 输入应为十六进制字符（0-9, a-f, A-F）。
-/// 每个字符会被扩展为两个字节（例如："8" -> "88" -> 0x88）
+/// 如果长度为奇数，在前面补0。
 pub fn parse_suffix_condition(suffix: &str) -> anyhow::Result<u64> {
     let hex_str = suffix.trim_start_matches("0x");
     
@@ -130,16 +121,17 @@ pub fn parse_suffix_condition(suffix: &str) -> anyhow::Result<u64> {
         anyhow::bail!("Suffix must contain only hexadecimal characters (0-9, a-f, A-F)");
     }
     
-    // 将每个十六进制字符扩展为两个相同字符，然后解析为字节
-    // 例如："dead" -> "ddeeaadd" -> [0xdd, 0xee, 0xaa, 0xdd]
-    let expanded_hex: String = hex_str.chars()
-        .map(|c| format!("{}{}", c, c))
-        .collect::<String>();
+    // 如果长度为奇数，在前面补0
+    let hex_str = if hex_str.len() % 2 == 1 {
+        format!("0{}", hex_str)
+    } else {
+        hex_str.to_string()
+    };
     
-    let bytes = hex::decode(&expanded_hex)?;
+    let bytes = hex::decode(&hex_str)?;
     
     if bytes.len() > 6 {
-        anyhow::bail!("Suffix too long, max 6 bytes (6 hex characters)");
+        anyhow::bail!("Suffix too long, max 6 bytes (12 hex characters)");
     }
     
     let mut param: u64 = 0;
