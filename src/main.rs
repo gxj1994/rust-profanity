@@ -85,7 +85,7 @@ fn load_kernel_source() -> anyhow::Result<String> {
     source.push_str(include_str!("../kernels/crypto/pbkdf2.cl"));
     source.push('\n');
     
-    // 3. SHA-256 (HMAC-SHA256 可能用到)
+    // 3. SHA-256 (BIP39 校验和计算依赖)
     source.push_str(include_str!("../kernels/crypto/sha256.cl"));
     source.push('\n');
     
@@ -101,7 +101,15 @@ fn load_kernel_source() -> anyhow::Result<String> {
     source.push_str(include_str!("../kernels/utils/condition.cl"));
     source.push('\n');
     
-    // 7. 主搜索内核 (包含 local_mnemonic_t 定义，必须在 mnemonic.cl 之前)
+    // 7. BIP39 词表 (entropy.cl 和 mnemonic.cl 依赖)
+    source.push_str(include_str!("../kernels/bip39/wordlist.cl"));
+    source.push('\n');
+    
+    // 8. BIP39 熵处理 (entropy_to_mnemonic 等，依赖 sha256 和 wordlist)
+    source.push_str(include_str!("../kernels/bip39/entropy.cl"));
+    source.push('\n');
+    
+    // 9. 主搜索内核 (包含 local_mnemonic_t 定义，必须在 mnemonic.cl 之前)
     let search_kernel = include_str!("../kernels/search.cl");
     for line in search_kernel.lines() {
         if !line.trim_start().starts_with("#include") {
@@ -111,11 +119,7 @@ fn load_kernel_source() -> anyhow::Result<String> {
     }
     source.push('\n');
     
-    // 8. BIP39 词表 (mnemonic.cl 依赖)
-    source.push_str(include_str!("../kernels/bip39/wordlist.cl"));
-    source.push('\n');
-    
-    // 9. BIP39 助记词处理 (依赖 local_mnemonic_t 和 wordlist.cl)
+    // 10. BIP39 助记词处理 (依赖 local_mnemonic_t 和 wordlist.cl)
     source.push_str(include_str!("../kernels/bip39/mnemonic.cl"));
     source.push('\n');
     
@@ -156,8 +160,13 @@ fn main() -> anyhow::Result<()> {
     let search_kernel = SearchKernel::new(&ctx, &kernel_source)?;
     
     // 5. 准备配置数据
+    // 从助记词重建熵，传递给 GPU
+    let (base_entropy, checksum_valid) = base_mnemonic.to_entropy();
+    if !checksum_valid {
+        log::warn!("基础助记词校验和验证失败，继续执行...");
+    }
     let config = SearchConfig::new(
-        base_mnemonic.words,
+        base_entropy,
         args.threads,
         condition,
     );

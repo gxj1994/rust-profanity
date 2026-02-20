@@ -7,7 +7,7 @@
 // 搜索配置结构 (与Rust端对应)
 // 注意：使用基本类型数组而不是嵌套结构体，避免OpenCL兼容性问题
 typedef struct {
-    ushort base_mnemonic_words[24];  // 基础助记词单词索引
+    uchar base_entropy[32];  // 基础熵 (256位)，而非助记词单词
     uint num_threads;
     ulong condition;
     uint check_interval;
@@ -26,45 +26,43 @@ typedef struct {
     ushort words[24];
 } local_mnemonic_t;
 
-// 函数前置声明 (在 mnemonic.cl 中实现)
+// 函数前置声明
 void get_ethereum_private_key_local(const local_mnemonic_t* mnemonic, uchar private_key[32]);
+void entropy_to_mnemonic(const uchar entropy[32], ushort words[24]);
+bool increment_entropy(uchar entropy[32], uint step);
 
-// 助记词遍历 - 按步长递增
-// 返回 false 表示遍历完成 (溢出)
-bool next_mnemonic(local_mnemonic_t* mn, uint step) {
-    uint carry = step;
+// 从熵生成以太坊地址
+// 流程: 熵 -> 助记词 -> 种子 -> 私钥 -> 公钥 -> Keccak-256 -> 地址
+void derive_address_from_entropy(const uchar entropy[32], uchar address[20]) {
+    // 1. 熵 -> 助记词 (符合 BIP39 标准，包含正确校验和)
+    ushort words[24];
+    entropy_to_mnemonic(entropy, words);
     
-    // 从最后一位开始进位
-    for (int i = 23; i >= 0 && carry > 0; i--) {
-        uint sum = (uint)mn->words[i] + carry;
-        mn->words[i] = (ushort)(sum % 2048);
-        carry = sum / 2048;
+    // 2. 构建 local_mnemonic_t
+    local_mnemonic_t mn;
+    for (int i = 0; i < 24; i++) {
+        mn.words[i] = words[i];
     }
     
-    // 如果还有进位，说明遍历完成
-    return (carry == 0);
-}
-
-// 完整的以太坊地址生成函数
-// 流程: 助记词 -> 种子 -> 私钥 -> 公钥 -> Keccak-256 -> 地址
-void derive_address(const local_mnemonic_t* mn, uchar address[20]) {
-    // 1. 助记词 -> 私钥 (BIP39 + BIP32)
+    // 3. 助记词 -> 私钥 (BIP39 + BIP32)
     uchar private_key[32];
-    get_ethereum_private_key_local(mn, private_key);
+    get_ethereum_private_key_local(&mn, private_key);
     
-    // 2. 私钥 -> 公钥 (secp256k1)
+    // 4. 私钥 -> 公钥 (secp256k1)
     uchar public_key[65];
     private_to_public(private_key, public_key);
     
-    // 3. 公钥 -> Keccak-256 哈希 (跳过 0x04 前缀)
+    // 5. 公钥 -> Keccak-256 哈希 (跳过 0x04 前缀)
     uchar hash[32];
     keccak256(public_key + 1, 64, hash);
     
-    // 4. 取后 20 字节作为以太坊地址
+    // 6. 取后 20 字节作为以太坊地址
     for (int i = 0; i < 20; i++) {
         address[i] = hash[i + 12];
     }
 }
+
+
 
 // 主搜索内核
 __kernel void search_kernel(
@@ -75,41 +73,40 @@ __kernel void search_kernel(
     uint tid = get_global_id(0);
     if (tid >= config->num_threads) return;
     
-    // 复制基础助记词到本地内存
-    local_mnemonic_t local_mn;
-    for (int i = 0; i < 24; i++) {
-        local_mn.words[i] = config->base_mnemonic_words[i];
+    // 复制基础熵到本地内存
+    uchar local_entropy[32];
+    for (int i = 0; i < 32; i++) {
+        local_entropy[i] = config->base_entropy[i];
     }
     
     // 设置本线程的起始偏移
-    // 注意：使用 next_mnemonic 来正确设置偏移，避免模运算导致的冲突
     // 每个线程从 tid 步进开始，步长为 num_threads
     if (tid > 0) {
-        // 从基础助记词开始，步进 tid 次
-        for (uint i = 0; i < tid; i++) {
-            if (!next_mnemonic(&local_mn, 1)) {
-                // 溢出，此线程没有搜索空间
-                return;
-            }
+        if (!increment_entropy(local_entropy, tid)) {
+            // 溢出，此线程没有搜索空间
+            return;
         }
     }
     
     uint counter = 0;
     
     while (!(*g_found_flag)) {
-        // 生成以太坊地址
+        // 从熵生成以太坊地址 (自动包含正确的 BIP39 校验和)
         uchar address[20];
-        derive_address(&local_mn, address);
+        derive_address_from_entropy(local_entropy, address);
         
         // 检查条件
         if (check_condition(address, config->condition)) {
             // 原子操作尝试设置标志
             int old_val = atomic_cmpxchg(g_found_flag, 0, 1);
             if (old_val == 0) {
-                // 保存结果
+                // 保存结果 - 从熵重新生成助记词
+                ushort words[24];
+                entropy_to_mnemonic(local_entropy, words);
+                
                 result->found = 1;
                 for (int i = 0; i < 24; i++) {
-                    result->result_mnemonic_words[i] = local_mn.words[i];
+                    result->result_mnemonic_words[i] = words[i];
                 }
                 for (int i = 0; i < 20; i++) {
                     result->eth_address[i] = address[i];
@@ -119,8 +116,8 @@ __kernel void search_kernel(
             break;
         }
         
-        // 遍历到下一个组合
-        if (!next_mnemonic(&local_mn, config->num_threads)) {
+        // 遍历到下一个熵值
+        if (!increment_entropy(local_entropy, config->num_threads)) {
             break;  // 本线程搜索空间耗尽
         }
         

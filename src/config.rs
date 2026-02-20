@@ -5,8 +5,9 @@
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct SearchConfig {
-    /// 基础助记词种子 (24个单词索引) - 对应 OpenCL ushort[24]
-    pub base_mnemonic: [u16; 24],
+    /// 基础熵 (32字节 = 256位) - 对应 OpenCL uchar[32]
+    /// 使用熵而非助记词，确保 GPU 可以生成符合 BIP39 标准的有效助记词
+    pub base_entropy: [u8; 32],
     /// GPU 线程数 - 对应 OpenCL uint
     pub num_threads: u32,
     /// 搜索条件编码 - 对应 OpenCL ulong
@@ -17,9 +18,9 @@ pub struct SearchConfig {
 }
 
 impl SearchConfig {
-    pub fn new(base_mnemonic: [u16; 24], num_threads: u32, condition: u64) -> Self {
+    pub fn new(base_entropy: [u8; 32], num_threads: u32, condition: u64) -> Self {
         Self {
-            base_mnemonic,
+            base_entropy,
             num_threads,
             condition,
             check_interval: 1024,
@@ -141,10 +142,10 @@ mod tests {
     #[test]
     fn test_struct_sizes() {
         // 验证结构体大小与 OpenCL 端匹配
-        // OpenCL: typedef struct { ushort[24]; uint; ulong; uint; } = 48 + 4 + 8 + 4 = 64 (可能有填充)
+        // OpenCL: typedef struct { uchar[32]; uint; ulong; uint; } = 32 + 4 + 8 + 4 = 48 (可能有填充)
         let config_size = std::mem::size_of::<SearchConfig>();
         println!("SearchConfig size: {}", config_size);
-        assert!(config_size >= 64, "SearchConfig too small");
+        assert!(config_size >= 48, "SearchConfig too small");
 
         // OpenCL: typedef struct { int; ushort[24]; uchar[20]; uint; } = 4 + 48 + 20 + 4 = 76 (可能有填充)
         let result_size = std::mem::size_of::<SearchResult>();

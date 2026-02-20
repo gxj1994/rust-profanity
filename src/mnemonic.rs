@@ -140,6 +140,39 @@ impl Mnemonic {
         
         checksum == expected_checksum
     }
+    
+    /// 从助记词重建熵 (256位)
+    /// 返回熵和校验和是否有效的布尔值
+    pub fn to_entropy(&self) -> ([u8; 32], bool) {
+        // 从单词索引重建位流
+        let mut all_bits = [0u8; 33];
+        
+        for (i, &word_idx) in self.words.iter().enumerate() {
+            let bit_offset = i * 11;
+            
+            for j in 0..11 {
+                let bit_pos = bit_offset + j;
+                let byte_idx = bit_pos / 8;
+                let bit_in_byte = 7 - (bit_pos % 8);
+                
+                if (word_idx >> (10 - j)) & 1 == 1 {
+                    all_bits[byte_idx] |= 1 << bit_in_byte;
+                }
+            }
+        }
+        
+        // 提取熵
+        let mut entropy = [0u8; 32];
+        entropy.copy_from_slice(&all_bits[..32]);
+        let checksum = all_bits[32];
+        
+        // 验证校验和
+        let hash = Sha256::digest(&entropy);
+        let expected_checksum = hash[0] >> (8 - 8);
+        let valid = checksum == expected_checksum;
+        
+        (entropy, valid)
+    }
 }
 
 impl std::fmt::Display for Mnemonic {
