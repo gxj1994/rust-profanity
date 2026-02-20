@@ -7,6 +7,6 @@ pub mod config;
 pub mod mnemonic;
 pub mod opencl;
 
-pub use config::{SearchConfig, SearchResult, parse_prefix_condition, parse_suffix_condition, parse_leading_zeros_condition, parse_leading_zeros_exact_condition};
+pub use config::{SearchConfig, SearchResult, parse_prefix_condition, parse_suffix_condition, parse_leading_zeros_condition};
 pub use mnemonic::Mnemonic;
 pub use opencl::{OpenCLContext, SearchKernel};

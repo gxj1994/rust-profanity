@@ -155,14 +155,6 @@ pub fn parse_leading_zeros_condition(zeros: u32) -> anyhow::Result<u64> {
     Ok(ConditionType::Leading.encode(zeros as u64))
 }
 
-/// 解析前导零条件 (精确匹配)
-pub fn parse_leading_zeros_exact_condition(zeros: u32) -> anyhow::Result<u64> {
-    if zeros > 20 {
-        anyhow::bail!("Leading zeros cannot exceed 20");
-    }
-    Ok(ConditionType::LeadingExact.encode(zeros as u64))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

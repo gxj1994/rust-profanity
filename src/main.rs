@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use std::thread::sleep;
 
 use rust_profanity::{
-    config::{*, parse_leading_zeros_exact_condition},
+    config::{*},
     mnemonic::Mnemonic,
     opencl::{OpenCLContext, SearchKernel},
 };
