@@ -111,7 +111,11 @@ fn load_kernel_source() -> anyhow::Result<String> {
     }
     source.push('\n');
     
-    // 8. BIP39 助记词处理 (依赖 local_mnemonic_t)
+    // 8. BIP39 词表 (mnemonic.cl 依赖)
+    source.push_str(include_str!("../kernels/bip39/wordlist.cl"));
+    source.push('\n');
+    
+    // 9. BIP39 助记词处理 (依赖 local_mnemonic_t 和 wordlist.cl)
     source.push_str(include_str!("../kernels/bip39/mnemonic.cl"));
     source.push('\n');
     

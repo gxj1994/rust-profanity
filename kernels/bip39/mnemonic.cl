@@ -5,7 +5,7 @@
 // #ifndef MNEMONIC_CL
 // #define MNEMONIC_CL
 
-// 需要包含 sha512.cl 和 pbkdf2.cl
+// 需要包含 sha512.cl、pbkdf2.cl 和 wordlist.cl
 
 // 助记词结构
 typedef struct {
@@ -31,36 +31,43 @@ __constant uint DERIVATION_PATH[5] = {
     0x00000000   // 0
 };
 
-// 将助记词索引转换为密码字符串
-// 注意：BIP39 实际使用助记词单词，但 GPU 上我们直接使用索引计算
-// 这里使用简化的密码表示
-void mnemonic_to_password(const mnemonic_t* mnemonic, uchar password[64]) {
-    // 将 24 个 11-bit 索引打包成密码
-    // 简化处理：直接使用索引的字节表示
+// 将助记词转换为标准BIP39字符串
+// 单词之间用空格分隔
+// 返回字符串长度
+uchar mnemonic_to_string(const mnemonic_t* mnemonic, uchar* output, uchar max_len) {
+    uchar pos = 0;
+    
     for (int i = 0; i < 24; i++) {
-        password[i * 2] = (uchar)(mnemonic->words[i] >> 8);
-        password[i * 2 + 1] = (uchar)(mnemonic->words[i] & 0xFF);
+        // 添加空格分隔符 (第一个单词前不加)
+        if (i > 0) {
+            if (pos >= max_len) return pos;
+            output[pos++] = ' ';
+        }
+        
+        // 复制单词
+        ushort word_idx = mnemonic->words[i];
+        uchar word_len = copy_word(word_idx, output + pos, max_len - pos);
+        pos += word_len;
     }
-    // 剩余字节清零
-    for (int i = 48; i < 64; i++) {
-        password[i] = 0;
-    }
+    
+    return pos;
 }
 
-// 助记词到种子 (BIP39)
+// 助记词到种子 (BIP39 标准)
 // 使用 PBKDF2-HMAC-SHA512
-// password: 助记词字符串
+// password: 助记词字符串 (单词之间用空格分隔)
 // salt: "mnemonic" + 可选密码
 // 迭代次数: 2048
 void mnemonic_to_seed(const mnemonic_t* mnemonic, seed_t* seed) {
-    uchar password[64];
-    mnemonic_to_password(mnemonic, password);
+    // 构建助记词字符串 (最大约 24 * 8 + 23 = 215 字节)
+    uchar password[256];
+    uchar password_len = mnemonic_to_string(mnemonic, password, 255);
     
     // salt = "mnemonic"
     uchar salt[8] = {'m', 'n', 'e', 'm', 'o', 'n', 'i', 'c'};
     
     // PBKDF2-HMAC-SHA512, 2048 次迭代
-    pbkdf2_hmac_sha512(password, 48, salt, 8, 2048, seed->bytes, 64);
+    pbkdf2_hmac_sha512(password, password_len, salt, 8, 2048, seed->bytes, 64);
 }
 
 // HMAC-SHA512 用于 BIP32
