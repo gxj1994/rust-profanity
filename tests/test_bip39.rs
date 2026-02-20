@@ -351,6 +351,120 @@ fn test_new_found_mnemonic() {
     assert!(valid, "校验和必须有效");
 }
 
+/// 验证用户报告的助记词地址
+#[test]
+fn test_verify_user_mnemonic() {
+    use bip32::{XPrv, ChildNumber};
+    use secp256k1::{Secp256k1, SecretKey, PublicKey};
+    use sha3::{Keccak256, Digest};
+    
+    let mnemonic_str = "figure much song taxi merry behind way siege east way echo pole afraid execute comfort differ sniff grit hotel piece outside blossom chest age";
+    
+    println!("========================================");
+    println!("验证用户助记词地址");
+    println!("========================================");
+    println!("助记词: {}", mnemonic_str);
+    
+    // 使用bip39解析
+    let mnemonic = bip39::Mnemonic::parse_in(bip39::Language::English, mnemonic_str).expect("解析助记词失败");
+    let seed = mnemonic.to_seed("");
+    println!("种子: {}", hex::encode(&seed));
+    
+    // BIP32派生
+    let xprv = XPrv::new(&seed).unwrap();
+    let child = xprv
+        .derive_child(ChildNumber::new(44, true).unwrap()).unwrap()
+        .derive_child(ChildNumber::new(60, true).unwrap()).unwrap()
+        .derive_child(ChildNumber::new(0, true).unwrap()).unwrap()
+        .derive_child(ChildNumber::new(0, false).unwrap()).unwrap()
+        .derive_child(ChildNumber::new(0, false).unwrap()).unwrap();
+    
+    let private_key = child.private_key().to_bytes();
+    println!("私钥: {}", hex::encode(&private_key));
+    
+    // 生成公钥
+    let secp = Secp256k1::new();
+    let secret_key = SecretKey::from_slice(&private_key).unwrap();
+    let public_key = PublicKey::from_secret_key(&secp, &secret_key);
+    let uncompressed = public_key.serialize_uncompressed();
+    println!("未压缩公钥: {}", hex::encode(&uncompressed));
+    
+    // Keccak-256
+    let mut hasher = Keccak256::new();
+    hasher.update(&uncompressed[1..]);
+    let hash = hasher.finalize();
+    println!("Keccak哈希: {}", hex::encode(&hash));
+    
+    // 地址
+    let address = &hash[12..];
+    let address_hex = hex::encode(address);
+    println!("以太坊地址: 0x{}", address_hex);
+    
+    // 用户期望的地址
+    let expected_address = "cc89cf70b8a7988c7964e9bf24892e1feb1ef5f8";
+    println!("用户期望地址: 0x{}", expected_address);
+    println!("地址匹配: {}", address_hex == expected_address);
+    
+    println!("========================================");
+}
+
+/// 验证GPU找到的助记词和地址是否匹配
+#[test]
+fn test_verify_gpu_result() {
+    use bip32::{XPrv, ChildNumber};
+    use secp256k1::{Secp256k1, SecretKey, PublicKey};
+    use sha3::{Keccak256, Digest};
+    
+    // GPU找到的结果
+    let mnemonic_str = "sustain turkey image estate same over siren conduct into solar main logic radio gown seat clay boring senior soon twist episode track approve ask";
+    let expected_address = "00647a87e9b14fcf70a66659dad84bce652dc747";
+    
+    println!("========================================");
+    println!("验证GPU找到的助记词和地址");
+    println!("========================================");
+    println!("助记词: {}", mnemonic_str);
+    
+    // 使用bip39解析
+    let mnemonic = bip39::Mnemonic::parse_in(bip39::Language::English, mnemonic_str).expect("解析助记词失败");
+    let seed = mnemonic.to_seed("");
+    println!("种子: {}", hex::encode(&seed));
+    
+    // BIP32派生
+    let xprv = XPrv::new(&seed).unwrap();
+    let child = xprv
+        .derive_child(ChildNumber::new(44, true).unwrap()).unwrap()
+        .derive_child(ChildNumber::new(60, true).unwrap()).unwrap()
+        .derive_child(ChildNumber::new(0, true).unwrap()).unwrap()
+        .derive_child(ChildNumber::new(0, false).unwrap()).unwrap()
+        .derive_child(ChildNumber::new(0, false).unwrap()).unwrap();
+    
+    let private_key = child.private_key().to_bytes();
+    println!("私钥: {}", hex::encode(&private_key));
+    
+    // 生成公钥
+    let secp = Secp256k1::new();
+    let secret_key = SecretKey::from_slice(&private_key).unwrap();
+    let public_key = PublicKey::from_secret_key(&secp, &secret_key);
+    let uncompressed = public_key.serialize_uncompressed();
+    
+    // Keccak-256
+    let mut hasher = Keccak256::new();
+    hasher.update(&uncompressed[1..]);
+    let hash = hasher.finalize();
+    println!("Keccak哈希: {}", hex::encode(&hash));
+    
+    // 地址
+    let address = &hash[12..];
+    let address_hex = hex::encode(address);
+    println!("计算的以太坊地址: 0x{}", address_hex);
+    println!("GPU报告的地址: 0x{}", expected_address);
+    println!("地址匹配: {}", address_hex == expected_address);
+    
+    assert_eq!(address_hex, expected_address, "GPU生成的地址与Rust计算的不匹配!");
+    
+    println!("========================================");
+}
+
 /// 验证GPU生成的地址与Rust生成的地址一致
 /// 这是一个关键的集成测试，确保OpenCL内核生成的地址正确
 #[test]

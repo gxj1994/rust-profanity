@@ -81,9 +81,12 @@ void seed_to_master_key(const seed_t* seed, uchar master_key[64]) {
     hmac_sha512_bip32(key, 12, seed->bytes, 64, master_key);
 }
 
-// 从字节数组加载 uint256 (大端序 - BIP32标准)
+// 从字节数组加载 uint256 (小端序)
+// result[0] = 最低有效位(LSB), result[3] = 最高有效位(MSB)
 void uint256_from_bytes_mnemonic(const uchar bytes[32], ulong result[4]) {
     for (int i = 0; i < 4; i++) {
+        // 字节数组是大端序：bytes[0..7] 是最高8字节，bytes[24..31] 是最低8字节
+        // 转换为小端序数组：result[3] 存储最高8字节，result[0] 存储最低8字节
         result[3 - i] = ((ulong)bytes[i * 8] << 56) |
                        ((ulong)bytes[i * 8 + 1] << 48) |
                        ((ulong)bytes[i * 8 + 2] << 40) |
@@ -95,9 +98,12 @@ void uint256_from_bytes_mnemonic(const uchar bytes[32], ulong result[4]) {
     }
 }
 
-// 将 uint256 保存到字节数组 (大端序 - BIP32标准)
+// 将 uint256 保存到字节数组 (小端序数组转大端序字节)
+// value[0] = 最低有效位(LSB), value[3] = 最高有效位(MSB)
 void uint256_to_bytes_mnemonic(const ulong value[4], uchar bytes[32]) {
     for (int i = 0; i < 4; i++) {
+        // value[3] 是最高有效位，对应字节数组的 bytes[0..7]
+        // value[0] 是最低有效位，对应字节数组的 bytes[24..31]
         bytes[i * 8] = (uchar)(value[3 - i] >> 56);
         bytes[i * 8 + 1] = (uchar)(value[3 - i] >> 48);
         bytes[i * 8 + 2] = (uchar)(value[3 - i] >> 40);
@@ -109,30 +115,32 @@ void uint256_to_bytes_mnemonic(const ulong value[4], uchar bytes[32]) {
     }
 }
 
-// 比较两个 uint256 (大端序 - 从最高有效位开始比较)
+// 比较两个 uint256 (小端序 - 从最高有效位开始比较)
+// a[0], b[0] = 最低有效位, a[3], b[3] = 最高有效位
 int uint256_cmp_mnemonic(const ulong a[4], const ulong b[4]) {
-    for (int i = 0; i < 4; i++) {
+    for (int i = 3; i >= 0; i--) {
         if (a[i] < b[i]) return -1;
         if (a[i] > b[i]) return 1;
     }
     return 0;
 }
 
-// secp256k1 阶 n (大端序 - 与 uint256_from_bytes_mnemonic 一致)
+// secp256k1 阶 n (小端序 - 与 uint256_from_bytes_mnemonic 一致)
 // n = FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141
 __constant ulong SECP256K1_N_MNEMONIC[4] = {
-    0xFFFFFFFFFFFFFFFFULL,  // 最高 64 位
-    0xFFFFFFFFFFFFFFFEULL,
+    0xBFD25E8CD0364141ULL,  // 最低 64 位 (索引 0)
     0xBAAEDCE6AF48A03BULL,
-    0xBFD25E8CD0364141ULL   // 最低 64 位
+    0xFFFFFFFFFFFFFFFEULL,
+    0xFFFFFFFFFFFFFFFFULL   // 最高 64 位 (索引 3)
 };
 
 // 模加: result = (a + b) mod n
+// 注意: a, b, result 都是小端序，索引 0 是最低有效位(LSB)，索引 3 是最高有效位(MSB)
 void mod_add_n_mnemonic(const ulong a[4], const ulong b[4], ulong result[4]) {
     ulong carry = 0;
     
-    // 从最低有效位开始加法（索引 3）
-    for (int i = 3; i >= 0; i--) {
+    // 从最低有效位开始加法（索引 0）
+    for (int i = 0; i < 4; i++) {
         ulong sum = a[i] + b[i];
         ulong new_carry = (sum < a[i]) ? 1UL : 0UL;
         sum += carry;
@@ -150,7 +158,7 @@ void mod_add_n_mnemonic(const ulong a[4], const ulong b[4], ulong result[4]) {
     
     if (carry || uint256_cmp_mnemonic(result, n_local) >= 0) {
         ulong borrow = 0;
-        for (int i = 3; i >= 0; i--) {
+        for (int i = 0; i < 4; i++) {
             ulong diff = result[i] - n_local[i] - borrow;
             borrow = (result[i] < n_local[i] + borrow) ? 1UL : 0UL;
             result[i] = diff;
@@ -163,7 +171,8 @@ void mod_add_n_mnemonic(const ulong a[4], const ulong b[4], ulong result[4]) {
 // index: 派生索引 (>= 0x80000000 表示硬化派生)
 // child_key: 输出 64 字节
 void derive_child_key(const uchar parent_key[64], uint index, uchar child_key[64]) {
-    uchar data[37];
+    // 初始化 data 数组，避免未定义行为
+    uchar data[37] = {0};
     
     if (index >= 0x80000000) {
         // 硬化派生: 使用 0x00 || 父私钥 || 索引
@@ -204,14 +213,29 @@ void derive_child_key(const uchar parent_key[64], uint index, uchar child_key[64
     // child_chain_code = right_32_hmac
     
     ulong parent_priv[4], left_hmac[4], child_priv[4];
-    uint256_from_bytes_mnemonic(parent_key, parent_priv);
-    uint256_from_bytes_mnemonic(hmac_result, left_hmac);
+    uint256_from_bytes_mnemonic(parent_key, parent_priv);  // parent_key 前32字节是私钥
+    uint256_from_bytes_mnemonic(hmac_result, left_hmac);    // hmac_result 前32字节是左半部分
     
-    // 模加: child_priv = (parent_priv + left_hmac) mod n
-    mod_add_n_mnemonic(parent_priv, left_hmac, child_priv);
-    
-    // 输出子私钥 (前32字节)
-    uint256_to_bytes_mnemonic(child_priv, child_key);
+    // BIP32 IL 有效性检查: 如果 left_hmac >= n 或 left_hmac == 0，则当前索引无效
+    // 概率极低，但严格实现应添加检查
+    ulong zero[4] = {0, 0, 0, 0};
+    ulong n_local[4];
+    for (int i = 0; i < 4; i++) {
+        n_local[i] = SECP256K1_N_MNEMONIC[i];
+    }
+    if (uint256_cmp_mnemonic(left_hmac, zero) == 0 ||
+        uint256_cmp_mnemonic(left_hmac, n_local) >= 0) {
+        // IL 无效，置零子私钥（实际应处理重试或返回错误标志）
+        for (int i = 0; i < 32; i++) {
+            child_key[i] = 0;
+        }
+    } else {
+        // 模加: child_priv = (parent_priv + left_hmac) mod n
+        mod_add_n_mnemonic(parent_priv, left_hmac, child_priv);
+        
+        // 输出子私钥 (前32字节)
+        uint256_to_bytes_mnemonic(child_priv, child_key);
+    }
     
     // 输出子链码 (后32字节) - 直接复制 HMAC 右半部分
     for (int i = 0; i < 32; i++) {
