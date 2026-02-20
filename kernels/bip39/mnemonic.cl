@@ -83,36 +83,94 @@ void seed_to_master_key(const seed_t* seed, uchar master_key[64]) {
 
 // 从字节数组加载 uint256 (小端序)
 // result[0] = 最低有效位(LSB), result[3] = 最高有效位(MSB)
+// 字节数组是大端序：bytes[0..7] 是最高8字节，bytes[24..31] 是最低8字节
+// 转换为小端序数组：result[3] 存储最高8字节，result[0] 存储最低8字节
 void uint256_from_bytes_mnemonic(const uchar bytes[32], ulong result[4]) {
-    for (int i = 0; i < 4; i++) {
-        // 字节数组是大端序：bytes[0..7] 是最高8字节，bytes[24..31] 是最低8字节
-        // 转换为小端序数组：result[3] 存储最高8字节，result[0] 存储最低8字节
-        result[3 - i] = ((ulong)bytes[i * 8] << 56) |
-                       ((ulong)bytes[i * 8 + 1] << 48) |
-                       ((ulong)bytes[i * 8 + 2] << 40) |
-                       ((ulong)bytes[i * 8 + 3] << 32) |
-                       ((ulong)bytes[i * 8 + 4] << 24) |
-                       ((ulong)bytes[i * 8 + 5] << 16) |
-                       ((ulong)bytes[i * 8 + 6] << 8) |
-                       ((ulong)bytes[i * 8 + 7]);
-    }
+    // bytes[24..31] -> result[0] (最低8字节)
+    result[0] = ((ulong)bytes[24] << 56) |
+                ((ulong)bytes[25] << 48) |
+                ((ulong)bytes[26] << 40) |
+                ((ulong)bytes[27] << 32) |
+                ((ulong)bytes[28] << 24) |
+                ((ulong)bytes[29] << 16) |
+                ((ulong)bytes[30] << 8) |
+                ((ulong)bytes[31]);
+    
+    // bytes[16..23] -> result[1]
+    result[1] = ((ulong)bytes[16] << 56) |
+                ((ulong)bytes[17] << 48) |
+                ((ulong)bytes[18] << 40) |
+                ((ulong)bytes[19] << 32) |
+                ((ulong)bytes[20] << 24) |
+                ((ulong)bytes[21] << 16) |
+                ((ulong)bytes[22] << 8) |
+                ((ulong)bytes[23]);
+    
+    // bytes[8..15] -> result[2]
+    result[2] = ((ulong)bytes[8] << 56) |
+                ((ulong)bytes[9] << 48) |
+                ((ulong)bytes[10] << 40) |
+                ((ulong)bytes[11] << 32) |
+                ((ulong)bytes[12] << 24) |
+                ((ulong)bytes[13] << 16) |
+                ((ulong)bytes[14] << 8) |
+                ((ulong)bytes[15]);
+    
+    // bytes[0..7] -> result[3] (最高8字节)
+    result[3] = ((ulong)bytes[0] << 56) |
+                ((ulong)bytes[1] << 48) |
+                ((ulong)bytes[2] << 40) |
+                ((ulong)bytes[3] << 32) |
+                ((ulong)bytes[4] << 24) |
+                ((ulong)bytes[5] << 16) |
+                ((ulong)bytes[6] << 8) |
+                ((ulong)bytes[7]);
 }
 
 // 将 uint256 保存到字节数组 (小端序数组转大端序字节)
 // value[0] = 最低有效位(LSB), value[3] = 最高有效位(MSB)
+// value[3] 是最高有效位，对应字节数组的 bytes[0..7]
+// value[0] 是最低有效位，对应字节数组的 bytes[24..31]
 void uint256_to_bytes_mnemonic(const ulong value[4], uchar bytes[32]) {
-    for (int i = 0; i < 4; i++) {
-        // value[3] 是最高有效位，对应字节数组的 bytes[0..7]
-        // value[0] 是最低有效位，对应字节数组的 bytes[24..31]
-        bytes[i * 8] = (uchar)(value[3 - i] >> 56);
-        bytes[i * 8 + 1] = (uchar)(value[3 - i] >> 48);
-        bytes[i * 8 + 2] = (uchar)(value[3 - i] >> 40);
-        bytes[i * 8 + 3] = (uchar)(value[3 - i] >> 32);
-        bytes[i * 8 + 4] = (uchar)(value[3 - i] >> 24);
-        bytes[i * 8 + 5] = (uchar)(value[3 - i] >> 16);
-        bytes[i * 8 + 6] = (uchar)(value[3 - i] >> 8);
-        bytes[i * 8 + 7] = (uchar)(value[3 - i]);
-    }
+    // value[3] (最高8字节) -> bytes[0..7]
+    bytes[0] = (uchar)(value[3] >> 56);
+    bytes[1] = (uchar)(value[3] >> 48);
+    bytes[2] = (uchar)(value[3] >> 40);
+    bytes[3] = (uchar)(value[3] >> 32);
+    bytes[4] = (uchar)(value[3] >> 24);
+    bytes[5] = (uchar)(value[3] >> 16);
+    bytes[6] = (uchar)(value[3] >> 8);
+    bytes[7] = (uchar)(value[3]);
+    
+    // value[2] -> bytes[8..15]
+    bytes[8] = (uchar)(value[2] >> 56);
+    bytes[9] = (uchar)(value[2] >> 48);
+    bytes[10] = (uchar)(value[2] >> 40);
+    bytes[11] = (uchar)(value[2] >> 32);
+    bytes[12] = (uchar)(value[2] >> 24);
+    bytes[13] = (uchar)(value[2] >> 16);
+    bytes[14] = (uchar)(value[2] >> 8);
+    bytes[15] = (uchar)(value[2]);
+    
+    // value[1] -> bytes[16..23]
+    bytes[16] = (uchar)(value[1] >> 56);
+    bytes[17] = (uchar)(value[1] >> 48);
+    bytes[18] = (uchar)(value[1] >> 40);
+    bytes[19] = (uchar)(value[1] >> 32);
+    bytes[20] = (uchar)(value[1] >> 24);
+    bytes[21] = (uchar)(value[1] >> 16);
+    bytes[22] = (uchar)(value[1] >> 8);
+    bytes[23] = (uchar)(value[1]);
+    
+    // value[0] (最低8字节) -> bytes[24..31]
+    bytes[24] = (uchar)(value[0] >> 56);
+    bytes[25] = (uchar)(value[0] >> 48);
+    bytes[26] = (uchar)(value[0] >> 40);
+    bytes[27] = (uchar)(value[0] >> 32);
+    bytes[28] = (uchar)(value[0] >> 24);
+    bytes[29] = (uchar)(value[0] >> 16);
+    bytes[30] = (uchar)(value[0] >> 8);
+    bytes[31] = (uchar)(value[0]);
 }
 
 // 比较两个 uint256 (小端序 - 从最高有效位开始比较)
@@ -141,11 +199,16 @@ void mod_add_n_mnemonic(const ulong a[4], const ulong b[4], ulong result[4]) {
     
     // 从最低有效位开始加法（索引 0）
     for (int i = 0; i < 4; i++) {
-        ulong sum = a[i] + b[i];
-        ulong new_carry = (sum < a[i]) ? 1UL : 0UL;
-        sum += carry;
-        if (sum < carry) new_carry++;
-        carry = new_carry;
+        // 分两步进行加法以正确检测进位
+        // 第一步: a[i] + b[i]
+        ulong temp_sum = a[i] + b[i];
+        ulong carry1 = (temp_sum < a[i]) ? 1UL : 0UL;  // 检测 a[i] + b[i] 是否溢出
+        
+        // 第二步: temp_sum + carry
+        ulong sum = temp_sum + carry;
+        ulong carry2 = (sum < temp_sum) ? 1UL : 0UL;  // 检测 temp_sum + carry 是否溢出
+        
+        carry = carry1 + carry2;
         result[i] = sum;
     }
     
@@ -160,7 +223,10 @@ void mod_add_n_mnemonic(const ulong a[4], const ulong b[4], ulong result[4]) {
         ulong borrow = 0;
         for (int i = 0; i < 4; i++) {
             ulong diff = result[i] - n_local[i] - borrow;
-            borrow = (result[i] < n_local[i] + borrow) ? 1UL : 0UL;
+            // 检查是否需要借位
+            // 如果 result[i] < n_local[i]，肯定需要借位
+            // 如果 result[i] == n_local[i] 且 borrow == 1，也需要借位
+            borrow = (result[i] < n_local[i] || (result[i] == n_local[i] && borrow == 1)) ? 1UL : 0UL;
             result[i] = diff;
         }
     }
