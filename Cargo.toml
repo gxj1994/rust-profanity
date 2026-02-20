@@ -1,0 +1,31 @@
+[package]
+name = "rust-profanity"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+# OpenCL 支持
+ocl = "0.19"
+
+# 密码学
+sha2 = "0.10"
+hmac = "0.12"
+pbkdf2 = "0.12"
+
+# 随机数生成
+rand = "0.8"
+
+# 错误处理
+thiserror = "1.0"
+anyhow = "1.0"
+
+# 命令行解析
+clap = { version = "4.5", features = ["derive"] }
+
+# 日志
+log = "0.4"
+env_logger = "0.11"
+
+# 字节处理
+byteorder = "1.5"
+hex = "0.4"
