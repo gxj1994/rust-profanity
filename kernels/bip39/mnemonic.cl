@@ -81,154 +81,77 @@ void seed_to_master_key(const seed_t* seed, uchar master_key[64]) {
     hmac_sha512_bip32(key, 12, seed->bytes, 64, master_key);
 }
 
-// 从字节数组加载 uint256 (小端序)
-// result[0] = 最低有效位(LSB), result[3] = 最高有效位(MSB)
-// 字节数组是大端序：bytes[0..7] 是最高8字节，bytes[24..31] 是最低8字节
-// 转换为小端序数组：result[3] 存储最高8字节，result[0] 存储最低8字节
-void uint256_from_bytes_mnemonic(const uchar bytes[32], ulong result[4]) {
-    // bytes[24..31] -> result[0] (最低8字节)
-    result[0] = ((ulong)bytes[24] << 56) |
-                ((ulong)bytes[25] << 48) |
-                ((ulong)bytes[26] << 40) |
-                ((ulong)bytes[27] << 32) |
-                ((ulong)bytes[28] << 24) |
-                ((ulong)bytes[29] << 16) |
-                ((ulong)bytes[30] << 8) |
-                ((ulong)bytes[31]);
-    
-    // bytes[16..23] -> result[1]
-    result[1] = ((ulong)bytes[16] << 56) |
-                ((ulong)bytes[17] << 48) |
-                ((ulong)bytes[18] << 40) |
-                ((ulong)bytes[19] << 32) |
-                ((ulong)bytes[20] << 24) |
-                ((ulong)bytes[21] << 16) |
-                ((ulong)bytes[22] << 8) |
-                ((ulong)bytes[23]);
-    
-    // bytes[8..15] -> result[2]
-    result[2] = ((ulong)bytes[8] << 56) |
-                ((ulong)bytes[9] << 48) |
-                ((ulong)bytes[10] << 40) |
-                ((ulong)bytes[11] << 32) |
-                ((ulong)bytes[12] << 24) |
-                ((ulong)bytes[13] << 16) |
-                ((ulong)bytes[14] << 8) |
-                ((ulong)bytes[15]);
-    
-    // bytes[0..7] -> result[3] (最高8字节)
-    result[3] = ((ulong)bytes[0] << 56) |
-                ((ulong)bytes[1] << 48) |
-                ((ulong)bytes[2] << 40) |
-                ((ulong)bytes[3] << 32) |
-                ((ulong)bytes[4] << 24) |
-                ((ulong)bytes[5] << 16) |
-                ((ulong)bytes[6] << 8) |
-                ((ulong)bytes[7]);
+// 从字节数组加载 mp_number (大端序字节 -> 小端序 mp_number)
+// 使用 secp256k1.cl 中的 mp_from_bytes
+void mp_from_bytes_mnemonic(const uchar bytes[32], mp_number* result) {
+    mp_from_bytes(bytes, result);
 }
 
-// 将 uint256 保存到字节数组 (小端序数组转大端序字节)
-// value[0] = 最低有效位(LSB), value[3] = 最高有效位(MSB)
-// value[3] 是最高有效位，对应字节数组的 bytes[0..7]
-// value[0] 是最低有效位，对应字节数组的 bytes[24..31]
-void uint256_to_bytes_mnemonic(const ulong value[4], uchar bytes[32]) {
-    // value[3] (最高8字节) -> bytes[0..7]
-    bytes[0] = (uchar)(value[3] >> 56);
-    bytes[1] = (uchar)(value[3] >> 48);
-    bytes[2] = (uchar)(value[3] >> 40);
-    bytes[3] = (uchar)(value[3] >> 32);
-    bytes[4] = (uchar)(value[3] >> 24);
-    bytes[5] = (uchar)(value[3] >> 16);
-    bytes[6] = (uchar)(value[3] >> 8);
-    bytes[7] = (uchar)(value[3]);
-    
-    // value[2] -> bytes[8..15]
-    bytes[8] = (uchar)(value[2] >> 56);
-    bytes[9] = (uchar)(value[2] >> 48);
-    bytes[10] = (uchar)(value[2] >> 40);
-    bytes[11] = (uchar)(value[2] >> 32);
-    bytes[12] = (uchar)(value[2] >> 24);
-    bytes[13] = (uchar)(value[2] >> 16);
-    bytes[14] = (uchar)(value[2] >> 8);
-    bytes[15] = (uchar)(value[2]);
-    
-    // value[1] -> bytes[16..23]
-    bytes[16] = (uchar)(value[1] >> 56);
-    bytes[17] = (uchar)(value[1] >> 48);
-    bytes[18] = (uchar)(value[1] >> 40);
-    bytes[19] = (uchar)(value[1] >> 32);
-    bytes[20] = (uchar)(value[1] >> 24);
-    bytes[21] = (uchar)(value[1] >> 16);
-    bytes[22] = (uchar)(value[1] >> 8);
-    bytes[23] = (uchar)(value[1]);
-    
-    // value[0] (最低8字节) -> bytes[24..31]
-    bytes[24] = (uchar)(value[0] >> 56);
-    bytes[25] = (uchar)(value[0] >> 48);
-    bytes[26] = (uchar)(value[0] >> 40);
-    bytes[27] = (uchar)(value[0] >> 32);
-    bytes[28] = (uchar)(value[0] >> 24);
-    bytes[29] = (uchar)(value[0] >> 16);
-    bytes[30] = (uchar)(value[0] >> 8);
-    bytes[31] = (uchar)(value[0]);
+// 将 mp_number 保存到字节数组 (小端序 mp_number -> 大端序字节)
+// 使用 secp256k1.cl 中的 mp_to_bytes
+void mp_to_bytes_mnemonic(const mp_number* value, uchar bytes[32]) {
+    mp_to_bytes(value, bytes);
 }
 
-// 比较两个 uint256 (小端序 - 从最高有效位开始比较)
-// a[0], b[0] = 最低有效位, a[3], b[3] = 最高有效位
-int uint256_cmp_mnemonic(const ulong a[4], const ulong b[4]) {
-    for (int i = 3; i >= 0; i--) {
-        if (a[i] < b[i]) return -1;
-        if (a[i] > b[i]) return 1;
+// secp256k1 阶 n (小端序 mp_number 格式)
+// n = FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141
+// 小端序: d[0] = 0xd0364141, d[1] = 0xbfd25e8c, d[2] = 0xaf48a03b, d[3] = 0xbaaedce6, 
+//         d[4] = 0xfffffffe, d[5] = 0xffffffff, d[6] = 0xffffffff, d[7] = 0xffffffff
+__constant mp_word SECP256K1_N_MNEMONIC[8] = {
+    0xd0364141, 0xbfd25e8c, 0xaf48a03b, 0xbaaedce6,
+    0xfffffffe, 0xffffffff, 0xffffffff, 0xffffffff
+};
+
+// 比较 mp_number 是否为零
+int mp_is_zero_mnemonic(const mp_number* a) {
+    return mp_is_zero(a);
+}
+
+// 比较 mp_number (从高位到低位比较)
+int mp_cmp_mnemonic(const mp_number* a, const mp_number* b) {
+    for (int i = 7; i >= 0; i--) {
+        if (a->d[i] < b->d[i]) return -1;
+        if (a->d[i] > b->d[i]) return 1;
     }
     return 0;
 }
 
-// secp256k1 阶 n (小端序 - 与 uint256_from_bytes_mnemonic 一致)
-// n = FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141
-__constant ulong SECP256K1_N_MNEMONIC[4] = {
-    0xBFD25E8CD0364141ULL,  // 最低 64 位 (索引 0)
-    0xBAAEDCE6AF48A03BULL,
-    0xFFFFFFFFFFFFFFFEULL,
-    0xFFFFFFFFFFFFFFFFULL   // 最高 64 位 (索引 3)
-};
-
 // 模加: result = (a + b) mod n
-// 注意: a, b, result 都是小端序，索引 0 是最低有效位(LSB)，索引 3 是最高有效位(MSB)
-void mod_add_n_mnemonic(const ulong a[4], const ulong b[4], ulong result[4]) {
-    ulong carry = 0;
+// 使用 secp256k1.cl 中的 mp_mod_add，但需要针对 n 而不是 p
+void mod_add_n_mnemonic(const mp_number* a, const mp_number* b, mp_number* result) {
+    // 先执行普通加法
+    mp_number temp_result;
+    mp_word carry = 0;
     
-    // 从最低有效位开始加法（索引 0）
-    for (int i = 0; i < 4; i++) {
-        // 分两步进行加法以正确检测进位
-        // 第一步: a[i] + b[i]
-        ulong temp_sum = a[i] + b[i];
-        ulong carry1 = (temp_sum < a[i]) ? 1UL : 0UL;  // 检测 a[i] + b[i] 是否溢出
-        
-        // 第二步: temp_sum + carry
-        ulong sum = temp_sum + carry;
-        ulong carry2 = (sum < temp_sum) ? 1UL : 0UL;  // 检测 temp_sum + carry 是否溢出
-        
-        carry = carry1 + carry2;
-        result[i] = sum;
+    for (int i = 0; i < 8; i++) {
+        mp_word sum = a->d[i] + b->d[i] + carry;
+        carry = (sum < a->d[i]) ? 1 : 0;
+        temp_result.d[i] = sum;
     }
     
-    // 如果结果 >= n，减去 n
-    // 将 __constant 数据复制到局部变量进行比较
-    ulong n_local[4];
-    for (int i = 0; i < 4; i++) {
-        n_local[i] = SECP256K1_N_MNEMONIC[i];
+    // 如果溢出或结果 >= n，需要减去 n
+    mp_number n_local;
+    for (int i = 0; i < 8; i++) {
+        n_local.d[i] = SECP256K1_N_MNEMONIC[i];
     }
     
-    if (carry || uint256_cmp_mnemonic(result, n_local) >= 0) {
-        ulong borrow = 0;
-        for (int i = 0; i < 4; i++) {
-            ulong diff = result[i] - n_local[i] - borrow;
-            // 检查是否需要借位
-            // 如果 result[i] < n_local[i]，肯定需要借位
-            // 如果 result[i] == n_local[i] 且 borrow == 1，也需要借位
-            borrow = (result[i] < n_local[i] || (result[i] == n_local[i] && borrow == 1)) ? 1UL : 0UL;
-            result[i] = diff;
+    // 使用正确的比较函数 (从高位到低位)
+    int cmp_result = mp_cmp_mnemonic(&temp_result, &n_local);
+    
+    if (carry || cmp_result >= 0) {
+        mp_word borrow = 0;
+        for (int i = 0; i < 8; i++) {
+            mp_word diff = temp_result.d[i] - n_local.d[i] - borrow;
+            // 正确的借位检测
+            if (borrow == 0) {
+                borrow = (temp_result.d[i] < n_local.d[i]) ? 1 : 0;
+            } else {
+                borrow = (temp_result.d[i] <= n_local.d[i]) ? 1 : 0;
+            }
+            result->d[i] = diff;
         }
+    } else {
+        *result = temp_result;
     }
 }
 
@@ -278,29 +201,29 @@ void derive_child_key(const uchar parent_key[64], uint index, uchar child_key[64
     // child_private_key = (parent_private_key + left_32_hmac) mod n
     // child_chain_code = right_32_hmac
     
-    ulong parent_priv[4], left_hmac[4], child_priv[4];
-    uint256_from_bytes_mnemonic(parent_key, parent_priv);  // parent_key 前32字节是私钥
-    uint256_from_bytes_mnemonic(hmac_result, left_hmac);    // hmac_result 前32字节是左半部分
+    mp_number parent_priv, left_hmac, child_priv;
+    mp_from_bytes_mnemonic(parent_key, &parent_priv);  // parent_key 前32字节是私钥
+    mp_from_bytes_mnemonic(hmac_result, &left_hmac);    // hmac_result 前32字节是左半部分
     
     // BIP32 IL 有效性检查: 如果 left_hmac >= n 或 left_hmac == 0，则当前索引无效
     // 概率极低，但严格实现应添加检查
-    ulong zero[4] = {0, 0, 0, 0};
-    ulong n_local[4];
-    for (int i = 0; i < 4; i++) {
-        n_local[i] = SECP256K1_N_MNEMONIC[i];
+    mp_number zero = {{0, 0, 0, 0, 0, 0, 0, 0}};
+    mp_number n_local;
+    for (int i = 0; i < 8; i++) {
+        n_local.d[i] = SECP256K1_N_MNEMONIC[i];
     }
-    if (uint256_cmp_mnemonic(left_hmac, zero) == 0 ||
-        uint256_cmp_mnemonic(left_hmac, n_local) >= 0) {
+    if (mp_cmp_mnemonic(&left_hmac, &zero) == 0 ||
+        mp_cmp_mnemonic(&left_hmac, &n_local) >= 0) {
         // IL 无效，置零子私钥（实际应处理重试或返回错误标志）
         for (int i = 0; i < 32; i++) {
             child_key[i] = 0;
         }
     } else {
         // 模加: child_priv = (parent_priv + left_hmac) mod n
-        mod_add_n_mnemonic(parent_priv, left_hmac, child_priv);
+        mod_add_n_mnemonic(&parent_priv, &left_hmac, &child_priv);
         
         // 输出子私钥 (前32字节)
-        uint256_to_bytes_mnemonic(child_priv, child_key);
+        mp_to_bytes_mnemonic(&child_priv, child_key);
     }
     
     // 输出子链码 (后32字节) - 直接复制 HMAC 右半部分

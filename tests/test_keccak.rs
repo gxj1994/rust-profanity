@@ -5,7 +5,30 @@ use sha3::{Keccak256, Digest};
 use ocl::{ProQue, Buffer, MemFlags};
 
 fn load_kernel_source() -> String {
-    include_str!("../kernels/crypto/keccak.cl").to_string()
+    let mut source = include_str!("../kernels/crypto/keccak.cl").to_string();
+    // 添加内核包装，因为 keccak.cl 中只有普通函数
+    // 支持最大 1024 字节的输入
+    source.push_str(r#"
+__kernel void keccak256_kernel(
+    __global uchar* data,
+    uint len,
+    __global uchar* hash
+) {
+    // 支持最大 1024 字节的输入
+    uchar local_data[1024];
+    for (int i = 0; i < len && i < 1024; i++) {
+        local_data[i] = data[i];
+    }
+    
+    uchar local_hash[32];
+    keccak256(local_data, len, local_hash);
+    
+    for (int i = 0; i < 32; i++) {
+        hash[i] = local_hash[i];
+    }
+}
+"#);
+    source
 }
 
 fn rust_keccak256(data: &[u8]) -> [u8; 32] {
@@ -18,6 +41,11 @@ fn rust_keccak256(data: &[u8]) -> [u8; 32] {
 }
 
 fn opencl_keccak256(data: &[u8]) -> ocl::Result<[u8; 32]> {
+    // 限制输入大小
+    if data.len() > 1024 {
+        return Err(ocl::Error::from("Input too large for test kernel"));
+    }
+    
     let kernel_source = load_kernel_source();
     
     let proque = ProQue::builder()
@@ -25,12 +53,13 @@ fn opencl_keccak256(data: &[u8]) -> ocl::Result<[u8; 32]> {
         .dims(1)
         .build()?;
     
-    // 输入数据缓冲区
+    // 输入数据缓冲区 - 空输入时至少分配 1 字节
+    let input_len = if data.len() == 0 { 1 } else { data.len() };
     let input_buffer = Buffer::<u8>::builder()
         .queue(proque.queue().clone())
         .flags(MemFlags::READ_ONLY)
-        .len(data.len())
-        .copy_host_slice(data)
+        .len(input_len)
+        .copy_host_slice(if data.len() == 0 { &[0u8] } else { data })
         .build()?;
     
     // 输出哈希缓冲区
@@ -41,7 +70,7 @@ fn opencl_keccak256(data: &[u8]) -> ocl::Result<[u8; 32]> {
         .build()?;
     
     // 创建内核
-    let kernel = proque.kernel_builder("keccak256")
+    let kernel = proque.kernel_builder("keccak256_kernel")
         .arg(&input_buffer)
         .arg(data.len() as u32)
         .arg(&output_buffer)
@@ -136,11 +165,19 @@ mod tests {
 
     #[test]
     fn test_keccak256_public_key() {
-        // 示例未压缩公钥 (65字节: 0x04 + x + y)
-        let public_key = hex::decode(
-            "04d0de0aaeaefad02b8bdc8a01a1b8b11c696bd3d66a2c5f10780d95b7df4264\
-             5cd1a215354bf6de76c5e5a7c9e0c5e5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5"
-        ).unwrap_or_else(|_| vec![0u8; 65]);
+        // 使用有效的实际公钥数据 (65字节: 0x04 + x + y)
+        // 来自 test_opencl_debug_derivation 测试
+        let public_key: [u8; 65] = [
+            0x04, // 前缀
+            0xdc, 0x28, 0x6c, 0x82, 0x1c, 0x74, 0x90, 0xaf,
+            0xbe, 0x20, 0xa7, 0x9d, 0x13, 0x12, 0x3b, 0x9f,
+            0x41, 0xf3, 0xd7, 0xef, 0x21, 0xe4, 0xa9, 0xca,
+            0xac, 0xd2, 0x2f, 0x59, 0x83, 0xb2, 0x8e, 0xca,
+            0x0e, 0x4d, 0xbd, 0x56, 0x24, 0x50, 0x5a, 0x2c,
+            0x96, 0x8f, 0xec, 0x15, 0xf2, 0x59, 0x90, 0xc7,
+            0x32, 0x47, 0x36, 0x89, 0x0f, 0x6d, 0x0f, 0x74,
+            0x24, 0x1f, 0x98, 0xe4, 0x25, 0x9c, 0x1d, 0x42,
+        ];
         
         // 跳过 0x04 前缀，哈希 64 字节的 x||y
         let rust_hash = rust_keccak256(&public_key[1..]);

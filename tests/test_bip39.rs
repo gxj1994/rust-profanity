@@ -2092,3 +2092,661 @@ __kernel void test_mod_add(
     
     println!("\n========================================");
 }
+
+/// 详细的 BIP32 派生步骤调试测试
+/// 对比 OpenCL 和 Rust 在每一步的中间结果
+#[test]
+fn test_bip32_step_by_step_opencl_debug() {
+    use ocl::{ProQue, Buffer, MemFlags};
+    use rust_profanity::mnemonic::Mnemonic;
+    
+    // 使用与 OpenCL 测试相同的助记词 (23个 abandon + art)
+    let mnemonic_str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon art";
+    
+    let mnemonic = Mnemonic::from_string(mnemonic_str).expect("解析助记词失败");
+    let (entropy, valid) = mnemonic.to_entropy();
+    assert!(valid, "助记词校验和必须有效");
+    
+    println!("========================================");
+    println!("BIP32 逐步派生调试 - OpenCL vs Rust");
+    println!("========================================");
+    println!("测试熵: {}", hex::encode(&entropy));
+    
+    // 加载完整的内核源代码
+    let mut source = String::new();
+    source.push_str(include_str!("../kernels/crypto/sha512.cl"));
+    source.push('\n');
+    source.push_str(include_str!("../kernels/crypto/pbkdf2.cl"));
+    source.push('\n');
+    source.push_str(include_str!("../kernels/crypto/sha256.cl"));
+    source.push('\n');
+    source.push_str(include_str!("../kernels/crypto/keccak.cl"));
+    source.push('\n');
+    source.push_str(include_str!("../kernels/crypto/secp256k1.cl"));
+    source.push('\n');
+    source.push_str(include_str!("../kernels/utils/condition.cl"));
+    source.push('\n');
+    source.push_str(include_str!("../kernels/bip39/wordlist.cl"));
+    source.push('\n');
+    source.push_str(include_str!("../kernels/bip39/entropy.cl"));
+    source.push('\n');
+    
+    // search.cl 的内容 (去掉 #include)
+    let search_kernel = include_str!("../kernels/search.cl");
+    for line in search_kernel.lines() {
+        if !line.trim_start().starts_with("#include") {
+            source.push_str(line);
+            source.push('\n');
+        }
+    }
+    source.push('\n');
+    
+    // mnemonic.cl
+    source.push_str(include_str!("../kernels/bip39/mnemonic.cl"));
+    source.push('\n');
+    
+    // 添加详细的调试内核
+    source.push_str(r#"
+// 调试内核: 输出 BIP32 派生的每一步中间值
+__kernel void test_bip32_step_by_step(
+    __constant uchar* entropy,
+    __global uchar* seed_out,       // 64 bytes
+    __global uchar* master_out,     // 64 bytes
+    __global uchar* step1_out,      // 64 bytes (after 44')
+    __global uchar* step2_out,      // 64 bytes (after 60')
+    __global uchar* step3_out,      // 64 bytes (after 0' account)
+    __global uchar* step4_out,      // 64 bytes (after 0 external)
+    __global uchar* step5_out,      // 64 bytes (after 0 index)
+    __global uchar* debug_hmac_data, // 37 bytes * 5 steps = 185 bytes
+    __global uchar* debug_hmac_left  // 32 bytes * 5 steps = 160 bytes
+) {
+    // 复制熵到本地
+    uchar local_entropy[32];
+    for (int i = 0; i < 32; i++) {
+        local_entropy[i] = entropy[i];
+    }
+    
+    // 1. 熵 -> 助记词
+    ushort words[24];
+    entropy_to_mnemonic(local_entropy, words);
+    
+    // 2. 助记词 -> 种子
+    local_mnemonic_t mn;
+    for (int i = 0; i < 24; i++) {
+        mn.words[i] = words[i];
+    }
+    seed_t seed;
+    mnemonic_to_seed(&mn, &seed);
+    for (int i = 0; i < 64; i++) {
+        seed_out[i] = seed.bytes[i];
+    }
+    
+    // 3. 种子 -> 主密钥
+    uchar master_key[64];
+    seed_to_master_key(&seed, master_key);
+    for (int i = 0; i < 64; i++) {
+        master_out[i] = master_key[i];
+    }
+    
+    // 派生路径
+    uint path[5] = {0x8000002C, 0x8000003C, 0x80000000, 0x00000000, 0x00000000};
+    uchar current_key[64];
+    for (int i = 0; i < 64; i++) {
+        current_key[i] = master_key[i];
+    }
+    
+    __global uchar* step_outputs[5] = {step1_out, step2_out, step3_out, step4_out, step5_out};
+    
+    for (int step = 0; step < 5; step++) {
+        uint index = path[step];
+        
+        // 构建 HMAC 数据
+        uchar data[37] = {0};
+        if (index >= 0x80000000) {
+            data[0] = 0x00;
+            for (int i = 0; i < 32; i++) {
+                data[i + 1] = current_key[i];
+            }
+        } else {
+            uchar parent_public[65];
+            private_to_public(current_key, parent_public);
+            uchar y_lsb = parent_public[64];
+            data[0] = (y_lsb & 1) ? 0x03 : 0x02;
+            for (int i = 0; i < 32; i++) {
+                data[i + 1] = parent_public[i + 1];
+            }
+        }
+        data[33] = (uchar)(index >> 24);
+        data[34] = (uchar)(index >> 16);
+        data[35] = (uchar)(index >> 8);
+        data[36] = (uchar)index;
+        
+        // 保存 HMAC 数据用于调试
+        for (int i = 0; i < 37; i++) {
+            debug_hmac_data[step * 37 + i] = data[i];
+        }
+        
+        // HMAC-SHA512
+        uchar hmac_result[64];
+        hmac_sha512_bip32(current_key + 32, 32, data, 37, hmac_result);
+        
+        // 保存 HMAC Left (IL) 用于调试
+        for (int i = 0; i < 32; i++) {
+            debug_hmac_left[step * 32 + i] = hmac_result[i];
+        }
+        
+        // 派生子密钥
+        derive_child_key(current_key, index, current_key);
+        
+        // 保存当前步骤结果
+        for (int i = 0; i < 64; i++) {
+            step_outputs[step][i] = current_key[i];
+        }
+    }
+}
+"#);
+    
+    // 创建OpenCL上下文
+    let proque = match ProQue::builder()
+        .src(&source)
+        .dims(1)
+        .build() {
+        Ok(p) => p,
+        Err(e) => {
+            println!("OpenCL 不可用，跳过测试: {}", e);
+            return;
+        }
+    };
+    
+    // 创建缓冲区
+    let entropy_buffer = Buffer::<u8>::builder()
+        .queue(proque.queue().clone())
+        .flags(MemFlags::READ_ONLY)
+        .len(32)
+        .copy_host_slice(&entropy)
+        .build()
+        .expect("创建熵缓冲区失败");
+    
+    let seed_buffer = Buffer::<u8>::builder()
+        .queue(proque.queue().clone())
+        .flags(MemFlags::WRITE_ONLY)
+        .len(64)
+        .build()
+        .expect("创建种子缓冲区失败");
+    
+    let master_buffer = Buffer::<u8>::builder()
+        .queue(proque.queue().clone())
+        .flags(MemFlags::WRITE_ONLY)
+        .len(64)
+        .build()
+        .expect("创建主密钥缓冲区失败");
+    
+    let step1_buffer = Buffer::<u8>::builder()
+        .queue(proque.queue().clone())
+        .flags(MemFlags::WRITE_ONLY)
+        .len(64)
+        .build()
+        .expect("创建步骤1缓冲区失败");
+    
+    let step2_buffer = Buffer::<u8>::builder()
+        .queue(proque.queue().clone())
+        .flags(MemFlags::WRITE_ONLY)
+        .len(64)
+        .build()
+        .expect("创建步骤2缓冲区失败");
+    
+    let step3_buffer = Buffer::<u8>::builder()
+        .queue(proque.queue().clone())
+        .flags(MemFlags::WRITE_ONLY)
+        .len(64)
+        .build()
+        .expect("创建步骤3缓冲区失败");
+    
+    let step4_buffer = Buffer::<u8>::builder()
+        .queue(proque.queue().clone())
+        .flags(MemFlags::WRITE_ONLY)
+        .len(64)
+        .build()
+        .expect("创建步骤4缓冲区失败");
+    
+    let step5_buffer = Buffer::<u8>::builder()
+        .queue(proque.queue().clone())
+        .flags(MemFlags::WRITE_ONLY)
+        .len(64)
+        .build()
+        .expect("创建步骤5缓冲区失败");
+    
+    let hmac_data_buffer = Buffer::<u8>::builder()
+        .queue(proque.queue().clone())
+        .flags(MemFlags::WRITE_ONLY)
+        .len(185)  // 37 * 5
+        .build()
+        .expect("创建HMAC数据缓冲区失败");
+    
+    let hmac_left_buffer = Buffer::<u8>::builder()
+        .queue(proque.queue().clone())
+        .flags(MemFlags::WRITE_ONLY)
+        .len(160)  // 32 * 5
+        .build()
+        .expect("创建HMAC Left缓冲区失败");
+    
+    // 创建内核
+    let kernel = proque.kernel_builder("test_bip32_step_by_step")
+        .arg(&entropy_buffer)
+        .arg(&seed_buffer)
+        .arg(&master_buffer)
+        .arg(&step1_buffer)
+        .arg(&step2_buffer)
+        .arg(&step3_buffer)
+        .arg(&step4_buffer)
+        .arg(&step5_buffer)
+        .arg(&hmac_data_buffer)
+        .arg(&hmac_left_buffer)
+        .build()
+        .expect("创建内核失败");
+    
+    // 执行内核
+    unsafe {
+        kernel.enq().expect("执行内核失败");
+    }
+    
+    // 读取结果
+    let mut cl_seed = vec![0u8; 64];
+    let mut cl_master = vec![0u8; 64];
+    let mut cl_step1 = vec![0u8; 64];
+    let mut cl_step2 = vec![0u8; 64];
+    let mut cl_step3 = vec![0u8; 64];
+    let mut cl_step4 = vec![0u8; 64];
+    let mut cl_step5 = vec![0u8; 64];
+    let mut cl_hmac_data = vec![0u8; 185];
+    let mut cl_hmac_left = vec![0u8; 160];
+    
+    seed_buffer.read(&mut cl_seed).enq().expect("读取种子失败");
+    master_buffer.read(&mut cl_master).enq().expect("读取主密钥失败");
+    step1_buffer.read(&mut cl_step1).enq().expect("读取步骤1失败");
+    step2_buffer.read(&mut cl_step2).enq().expect("读取步骤2失败");
+    step3_buffer.read(&mut cl_step3).enq().expect("读取步骤3失败");
+    step4_buffer.read(&mut cl_step4).enq().expect("读取步骤4失败");
+    step5_buffer.read(&mut cl_step5).enq().expect("读取步骤5失败");
+    hmac_data_buffer.read(&mut cl_hmac_data).enq().expect("读取HMAC数据失败");
+    hmac_left_buffer.read(&mut cl_hmac_left).enq().expect("读取HMAC Left失败");
+    
+    // 打印结果
+    println!("\n1. BIP39 种子:");
+    println!("   OpenCL: {}", hex::encode(&cl_seed));
+    
+    println!("\n2. BIP32 主密钥:");
+    println!("   OpenCL 主私钥: {}", hex::encode(&cl_master[..32]));
+    println!("   OpenCL 主链码: {}", hex::encode(&cl_master[32..]));
+    
+    let step_names = ["44' ( hardened)", "60' ( hardened)", "0' (account hardened)", "0 (external)", "0 (index)"];
+    let step_outputs = [&cl_step1, &cl_step2, &cl_step3, &cl_step4, &cl_step5];
+    
+    for i in 0..5 {
+        println!("\n{}. 派生步骤 {} - {}:", i + 3, i + 1, step_names[i]);
+        println!("   HMAC Data:     {}", hex::encode(&cl_hmac_data[i * 37..i * 37 + 37]));
+        println!("   HMAC Left (IL): {}", hex::encode(&cl_hmac_left[i * 32..i * 32 + 32]));
+        println!("   Child Priv:    {}", hex::encode(&step_outputs[i][..32]));
+        println!("   Child Chain:   {}", hex::encode(&step_outputs[i][32..]));
+    }
+    
+    println!("\n========================================");
+    println!("最终私钥对比:");
+    println!("OpenCL: {}", hex::encode(&cl_step5[..32]));
+    println!("期望:   1053fae1b3ac64f178bcc21026fd06a3f4544ec2f35338b001f02d1d8efa3d5f");
+    println!("========================================");
+}
+
+/// 测试 OpenCL 的 private_to_public 函数
+#[test]
+fn test_opencl_private_to_public() {
+    use ocl::{ProQue, Buffer, MemFlags};
+    
+    // 步骤 3 后的私钥 (来自 Rust 的正确值)
+    let private_key: [u8; 32] = [
+        0x34, 0xd5, 0x1b, 0x6c, 0x75, 0xd6, 0x2b, 0xe8,
+        0x13, 0x0b, 0x48, 0x24, 0x05, 0x66, 0x0c, 0x8c,
+        0x6a, 0x7b, 0x50, 0x17, 0xd1, 0x42, 0x69, 0xc9,
+        0x26, 0x65, 0x2f, 0x35, 0x21, 0xf2, 0xdf, 0x27,
+    ];
+    
+    println!("========================================");
+    println!("测试 OpenCL private_to_public");
+    println!("========================================");
+    println!("私钥: {}", hex::encode(&private_key));
+    
+    // 使用 Rust 计算期望的公钥
+    let secp = secp256k1::Secp256k1::new();
+    let secret_key = secp256k1::SecretKey::from_slice(&private_key).unwrap();
+    let public_key = secp256k1::PublicKey::from_secret_key(&secp, &secret_key);
+    let expected_public = public_key.serialize_uncompressed();
+    let expected_compressed = public_key.serialize();
+    
+    println!("期望公钥 (未压缩): {}", hex::encode(&expected_public));
+    println!("期望公钥 (压缩):   {}", hex::encode(&expected_compressed));
+    
+    // 加载 OpenCL 内核
+    let mut source = String::new();
+    source.push_str(include_str!("../kernels/crypto/sha256.cl"));
+    source.push('\n');
+    source.push_str(include_str!("../kernels/crypto/sha512.cl"));
+    source.push('\n');
+    source.push_str(include_str!("../kernels/crypto/secp256k1.cl"));
+    source.push('\n');
+    
+    // 添加测试内核
+    source.push_str(r#"
+__kernel void test_private_to_public(
+    __constant uchar* private_key,
+    __global uchar* public_key
+) {
+    uchar local_private[32];
+    for (int i = 0; i < 32; i++) {
+        local_private[i] = private_key[i];
+    }
+    
+    uchar local_public[65];
+    private_to_public(local_private, local_public);
+    
+    for (int i = 0; i < 65; i++) {
+        public_key[i] = local_public[i];
+    }
+}
+"#);
+    
+    let proque = match ProQue::builder()
+        .src(&source)
+        .dims(1)
+        .build() {
+        Ok(p) => p,
+        Err(e) => {
+            println!("OpenCL 不可用，跳过测试: {}", e);
+            return;
+        }
+    };
+    
+    let private_buffer = Buffer::<u8>::builder()
+        .queue(proque.queue().clone())
+        .flags(MemFlags::READ_ONLY)
+        .len(32)
+        .copy_host_slice(&private_key)
+        .build()
+        .expect("创建私钥缓冲区失败");
+    
+    let public_buffer = Buffer::<u8>::builder()
+        .queue(proque.queue().clone())
+        .flags(MemFlags::WRITE_ONLY)
+        .len(65)
+        .build()
+        .expect("创建公钥缓冲区失败");
+    
+    let kernel = proque.kernel_builder("test_private_to_public")
+        .arg(&private_buffer)
+        .arg(&public_buffer)
+        .build()
+        .expect("创建内核失败");
+    
+    unsafe {
+        kernel.enq().expect("执行内核失败");
+    }
+    
+    let mut cl_public = vec![0u8; 65];
+    public_buffer.read(&mut cl_public).enq().expect("读取公钥失败");
+    
+    println!("OpenCL 公钥:       {}", hex::encode(&cl_public));
+    
+    // 验证
+    if cl_public == expected_public.to_vec() {
+        println!("✓ 公钥匹配！");
+    } else {
+        println!("✗ 公钥不匹配！");
+        println!("差异分析:");
+        for i in 0..65 {
+            if cl_public[i] != expected_public[i] {
+                println!("  字节 {}: OpenCL={:02x}, 期望={:02x}", i, cl_public[i], expected_public[i]);
+            }
+        }
+    }
+    
+    // 检查压缩公钥
+    let y_lsb = cl_public[64];
+    let prefix = if (y_lsb & 1) == 1 { 0x03 } else { 0x02 };
+    let mut cl_compressed = vec![0u8; 33];
+    cl_compressed[0] = prefix;
+    cl_compressed[1..33].copy_from_slice(&cl_public[1..33]);
+    
+    println!("OpenCL 压缩公钥:   {}", hex::encode(&cl_compressed));
+    println!("期望压缩公钥:     {}", hex::encode(&expected_compressed));
+    
+    if cl_compressed == expected_compressed.to_vec() {
+        println!("✓ 压缩公钥匹配！");
+    } else {
+        println!("✗ 压缩公钥不匹配！");
+    }
+    
+    println!("========================================");
+}
+
+/// 测试 OpenCL Keccak-256 使用实际公钥数据
+#[test]
+fn test_opencl_keccak_with_actual_pubkey() {
+    use ocl::{ProQue, Buffer, MemFlags};
+    use sha3::{Keccak256, Digest};
+    
+    println!("========================================");
+    println!("测试 OpenCL Keccak-256 使用实际公钥数据");
+    println!("========================================");
+    
+    // 使用与 test_opencl_debug_derivation 相同的实际公钥数据 (64字节，去掉0x04前缀)
+    let public_key_xy: [u8; 64] = [
+        0xdc, 0x28, 0x6c, 0x82, 0x1c, 0x74, 0x90, 0xaf,
+        0xbe, 0x20, 0xa7, 0x9d, 0x13, 0x12, 0x3b, 0x9f,
+        0x41, 0xf3, 0xd7, 0xef, 0x21, 0xe4, 0xa9, 0xca,
+        0xac, 0xd2, 0x2f, 0x59, 0x83, 0xb2, 0x8e, 0xca,
+        0x0e, 0x4d, 0xbd, 0x56, 0x24, 0x50, 0x5a, 0x2c,
+        0x96, 0x8f, 0xec, 0x15, 0xf2, 0x59, 0x90, 0xc7,
+        0x32, 0x47, 0x36, 0x89, 0x0f, 0x6d, 0x0f, 0x74,
+        0x24, 0x1f, 0x98, 0xe4, 0x25, 0x9c, 0x1d, 0x42,
+    ];
+    
+    println!("公钥 (64字节 X||Y): {}", hex::encode(&public_key_xy));
+    
+    // Rust Keccak-256
+    let mut hasher = Keccak256::new();
+    hasher.update(&public_key_xy);
+    let rust_hash = hasher.finalize();
+    println!("Rust Keccak-256:   {}", hex::encode(&rust_hash));
+    println!("Rust 地址 (后20字节): 0x{}", hex::encode(&rust_hash[12..]));
+    
+    // 使用与 test_keccak.rs 相同的方法，但需要添加内核包装
+    let mut kernel_source = include_str!("../kernels/crypto/keccak.cl").to_string();
+    kernel_source.push_str(r#"
+__kernel void keccak256_kernel(
+    __global uchar* data,
+    uint len,
+    __global uchar* hash
+) {
+    uchar local_data[64];
+    for (int i = 0; i < 64; i++) {
+        local_data[i] = data[i];
+    }
+    
+    uchar local_hash[32];
+    keccak256(local_data, len, local_hash);
+    
+    for (int i = 0; i < 32; i++) {
+        hash[i] = local_hash[i];
+    }
+}
+"#);
+    
+    let proque = match ProQue::builder()
+        .src(&kernel_source)
+        .dims(1)
+        .build() {
+        Ok(p) => p,
+        Err(e) => {
+            println!("OpenCL 不可用，跳过测试: {}", e);
+            return;
+        }
+    };
+    
+    let input_buffer = Buffer::<u8>::builder()
+        .queue(proque.queue().clone())
+        .flags(MemFlags::READ_ONLY)
+        .len(64)
+        .copy_host_slice(&public_key_xy)
+        .build()
+        .expect("创建数据缓冲区失败");
+    
+    let output_buffer = Buffer::<u8>::builder()
+        .queue(proque.queue().clone())
+        .flags(MemFlags::WRITE_ONLY)
+        .len(32)
+        .build()
+        .expect("创建哈希缓冲区失败");
+    
+    let kernel = proque.kernel_builder("keccak256_kernel")
+        .arg(&input_buffer)
+        .arg(64u32)
+        .arg(&output_buffer)
+        .build()
+        .expect("创建内核失败");
+    
+    unsafe {
+        kernel.enq().expect("执行内核失败");
+    }
+    
+    let mut cl_hash = vec![0u8; 32];
+    output_buffer.read(&mut cl_hash).enq().expect("读取哈希失败");
+    
+    println!("OpenCL Keccak-256: {}", hex::encode(&cl_hash));
+    println!("OpenCL 地址 (后20字节): 0x{}", hex::encode(&cl_hash[12..]));
+    
+    if cl_hash == rust_hash.to_vec() {
+        println!("✓ Keccak-256 哈希匹配！");
+    } else {
+        println!("✗ Keccak-256 哈希不匹配！");
+        println!("差异:");
+        for i in 0..32 {
+            if cl_hash[i] != rust_hash[i] {
+                println!("  字节 {}: OpenCL={:02x}, Rust={:02x}", i, cl_hash[i], rust_hash[i]);
+            }
+        }
+    }
+    
+    println!("========================================");
+}
+
+/// 测试 OpenCL 的模乘运算
+#[test]
+fn test_opencl_mod_mul() {
+    use ocl::{ProQue, Buffer, MemFlags};
+    
+    println!("========================================");
+    println!("测试 OpenCL 模乘运算");
+    println!("========================================");
+    
+    // 加载 OpenCL 内核
+    let mut source = String::new();
+    source.push_str(include_str!("../kernels/crypto/sha256.cl"));
+    source.push('\n');
+    source.push_str(include_str!("../kernels/crypto/sha512.cl"));
+    source.push('\n');
+    source.push_str(include_str!("../kernels/crypto/secp256k1.cl"));
+    source.push('\n');
+    
+    // 添加测试内核
+    source.push_str(r#"
+__kernel void test_mod_mul(
+    __constant uchar* a_bytes,
+    __constant uchar* b_bytes,
+    __global uchar* result_bytes
+) {
+    uint256_t a, b, result;
+    uint256_from_bytes(a_bytes, &a);
+    uint256_from_bytes(b_bytes, &b);
+    
+    mod_mul(&a, &b, &result);
+    
+    uint256_to_bytes(&result, result_bytes);
+}
+"#);
+    
+    let proque = match ProQue::builder()
+        .src(&source)
+        .dims(1)
+        .build() {
+        Ok(p) => p,
+        Err(e) => {
+            println!("OpenCL 不可用，跳过测试: {}", e);
+            return;
+        }
+    };
+    
+    // 测试用例: Gx * 1 = Gx mod p
+    let gx: [u8; 32] = [
+        0x79, 0xbe, 0x66, 0x7e, 0xf9, 0xdc, 0xbb, 0xac,
+        0x55, 0xa0, 0x62, 0x95, 0xce, 0x87, 0x0b, 0x07,
+        0x02, 0x9b, 0xfc, 0xdb, 0x2d, 0xce, 0x28, 0xd9,
+        0x59, 0xf2, 0x81, 0x5b, 0x16, 0xf8, 0x17, 0x98,
+    ];
+    
+    let one: [u8; 32] = [
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
+    ];
+    
+    println!("测试: Gx * 1 mod p");
+    println!("Gx:    {}", hex::encode(&gx));
+    println!("期望:  {}", hex::encode(&gx));
+    
+    let a_buffer = Buffer::<u8>::builder()
+        .queue(proque.queue().clone())
+        .flags(MemFlags::READ_ONLY)
+        .len(32)
+        .copy_host_slice(&gx)
+        .build()
+        .expect("创建缓冲区失败");
+    
+    let b_buffer = Buffer::<u8>::builder()
+        .queue(proque.queue().clone())
+        .flags(MemFlags::READ_ONLY)
+        .len(32)
+        .copy_host_slice(&one)
+        .build()
+        .expect("创建缓冲区失败");
+    
+    let result_buffer = Buffer::<u8>::builder()
+        .queue(proque.queue().clone())
+        .flags(MemFlags::WRITE_ONLY)
+        .len(32)
+        .build()
+        .expect("创建缓冲区失败");
+    
+    let kernel = proque.kernel_builder("test_mod_mul")
+        .arg(&a_buffer)
+        .arg(&b_buffer)
+        .arg(&result_buffer)
+        .build()
+        .expect("创建内核失败");
+    
+    unsafe {
+        kernel.enq().expect("执行内核失败");
+    }
+    
+    let mut result = vec![0u8; 32];
+    result_buffer.read(&mut result).enq().expect("读取结果失败");
+    
+    println!("OpenCL: {}", hex::encode(&result));
+    
+    if result == gx.to_vec() {
+        println!("✓ 模乘测试通过！");
+    } else {
+        println!("✗ 模乘测试失败！");
+    }
+    
+    println!("========================================");
+}
