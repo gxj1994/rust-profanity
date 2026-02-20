@@ -69,29 +69,14 @@ void mnemonic_to_seed(const mnemonic_t* mnemonic, seed_t* seed) {
     pbkdf2_hmac_sha512(password, password_len, salt, 8, 2048, seed->bytes, 64);
 }
 
-// HMAC-SHA512 用于 BIP32
-void hmac_sha512_bip32(const uchar* key, uint key_len, const uchar* data, uint data_len, uchar result[64]) {
-    hmac_sha512(key, key_len, data, data_len, result);
-}
-
 // 从种子生成主密钥 (BIP32)
 // 返回 64 字节: 前 32 字节是主私钥，后 32 字节是主链码
 void seed_to_master_key(const seed_t* seed, uchar master_key[64]) {
     const uchar key[] = {'B', 'i', 't', 'c', 'o', 'i', 'n', ' ', 's', 'e', 'e', 'd'};
-    hmac_sha512_bip32(key, 12, seed->bytes, 64, master_key);
+    hmac_sha512(key, 12, seed->bytes, 64, master_key);
 }
 
-// 从字节数组加载 mp_number (大端序字节 -> 小端序 mp_number)
-// 使用 secp256k1.cl 中的 mp_from_bytes
-void mp_from_bytes_mnemonic(const uchar bytes[32], mp_number* result) {
-    mp_from_bytes(bytes, result);
-}
 
-// 将 mp_number 保存到字节数组 (小端序 mp_number -> 大端序字节)
-// 使用 secp256k1.cl 中的 mp_to_bytes
-void mp_to_bytes_mnemonic(const mp_number* value, uchar bytes[32]) {
-    mp_to_bytes(value, bytes);
-}
 
 // secp256k1 阶 n (小端序 mp_number 格式)
 // n = FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141
@@ -102,13 +87,8 @@ __constant mp_word SECP256K1_N_MNEMONIC[8] = {
     0xfffffffe, 0xffffffff, 0xffffffff, 0xffffffff
 };
 
-// 比较 mp_number 是否为零
-int mp_is_zero_mnemonic(const mp_number* a) {
-    return mp_is_zero(a);
-}
-
 // 比较 mp_number (从高位到低位比较)
-int mp_cmp_mnemonic(const mp_number* a, const mp_number* b) {
+int mp_cmp_n(const mp_number* a, const mp_number* b) {
     for (int i = 7; i >= 0; i--) {
         if (a->d[i] < b->d[i]) return -1;
         if (a->d[i] > b->d[i]) return 1;
@@ -136,7 +116,7 @@ void mod_add_n_mnemonic(const mp_number* a, const mp_number* b, mp_number* resul
     }
     
     // 使用正确的比较函数 (从高位到低位)
-    int cmp_result = mp_cmp_mnemonic(&temp_result, &n_local);
+    int cmp_result = mp_cmp_n(&temp_result, &n_local);
     
     if (carry || cmp_result >= 0) {
         mp_word borrow = 0;
@@ -195,15 +175,15 @@ void derive_child_key(const uchar parent_key[64], uint index, uchar child_key[64
     
     // HMAC-SHA512
     uchar hmac_result[64];
-    hmac_sha512_bip32(parent_key + 32, 32, data, 37, hmac_result);
+    hmac_sha512(parent_key + 32, 32, data, 37, hmac_result);
     
     // 正确的 BIP32 子私钥计算:
     // child_private_key = (parent_private_key + left_32_hmac) mod n
     // child_chain_code = right_32_hmac
     
     mp_number parent_priv, left_hmac, child_priv;
-    mp_from_bytes_mnemonic(parent_key, &parent_priv);  // parent_key 前32字节是私钥
-    mp_from_bytes_mnemonic(hmac_result, &left_hmac);    // hmac_result 前32字节是左半部分
+    mp_from_bytes(parent_key, &parent_priv);  // parent_key 前32字节是私钥
+    mp_from_bytes(hmac_result, &left_hmac);    // hmac_result 前32字节是左半部分
     
     // BIP32 IL 有效性检查: 如果 left_hmac >= n 或 left_hmac == 0，则当前索引无效
     // 概率极低，但严格实现应添加检查
@@ -212,8 +192,8 @@ void derive_child_key(const uchar parent_key[64], uint index, uchar child_key[64
     for (int i = 0; i < 8; i++) {
         n_local.d[i] = SECP256K1_N_MNEMONIC[i];
     }
-    if (mp_cmp_mnemonic(&left_hmac, &zero) == 0 ||
-        mp_cmp_mnemonic(&left_hmac, &n_local) >= 0) {
+    if (mp_cmp_n(&left_hmac, &zero) == 0 ||
+        mp_cmp_n(&left_hmac, &n_local) >= 0) {
         // IL 无效，置零子私钥（实际应处理重试或返回错误标志）
         for (int i = 0; i < 32; i++) {
             child_key[i] = 0;
@@ -223,7 +203,7 @@ void derive_child_key(const uchar parent_key[64], uint index, uchar child_key[64
         mod_add_n_mnemonic(&parent_priv, &left_hmac, &child_priv);
         
         // 输出子私钥 (前32字节)
-        mp_to_bytes_mnemonic(&child_priv, child_key);
+        mp_to_bytes(&child_priv, child_key);
     }
     
     // 输出子链码 (后32字节) - 直接复制 HMAC 右半部分

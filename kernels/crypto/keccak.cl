@@ -159,10 +159,4 @@ void keccak256(const uchar* in, uint inlen, uchar md[32]) {
     }
 }
 
-// 简化版 Keccak-256，用于以太坊地址生成
-void keccak256_final(uchar hash[32]) {
-    // 这个函数在内联展开时使用
-    // 实际实现在 derive_address 中
-}
-
 #endif // KECCAK_CL
