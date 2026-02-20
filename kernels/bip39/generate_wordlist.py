@@ -353,7 +353,7 @@ def generate_opencl_wordlist():
 if __name__ == "__main__":
     opencl_code = generate_opencl_wordlist()
     
-    output_path = "/Users/guxiaojiao/codes/vscode/workPlace/rust-profanity/kernels/bip39/wordlist.cl"
+    output_path = " ./wordlist.cl"
     with open(output_path, 'w') as f:
         f.write(opencl_code)
     
