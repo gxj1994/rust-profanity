@@ -118,12 +118,6 @@ fn load_kernel_source() -> anyhow::Result<String> {
     Ok(source)
 }
 
-/// 加载简化版内核源代码
-#[allow(dead_code)]
-pub fn load_simple_kernel_source() -> anyhow::Result<String> {
-    Ok(include_str!("../kernels/search_simple.cl").to_string())
-}
-
 /// 主函数
 fn main() -> anyhow::Result<()> {
     // 初始化日志

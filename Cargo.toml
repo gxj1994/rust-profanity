@@ -11,6 +11,16 @@ ocl = "0.19"
 sha2 = "0.10"
 hmac = "0.12"
 pbkdf2 = "0.12"
+sha3 = "0.10"
+
+# 以太坊相关
+ethers-core = "2.0"
+
+# secp256k1
+secp256k1 = { version = "0.28", features = ["recovery", "global-context"] }
+
+# BIP39
+bip39 = "2.0"
 
 # 随机数生成
 rand = "0.8"
@@ -29,3 +39,7 @@ env_logger = "0.11"
 # 字节处理
 byteorder = "1.5"
 hex = "0.4"
+
+[dev-dependencies]
+# 测试框架
+pretty_assertions = "1.4"
