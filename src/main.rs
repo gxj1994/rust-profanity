@@ -34,10 +34,6 @@ struct Args {
     #[arg(long, group = "condition")]
     leading_zeros: Option<u32>,
     
-    /// 前导零个数 (精确匹配)
-    #[arg(long, group = "condition")]
-    leading_zeros_exact: Option<u32>,
-    
     /// GPU 线程数
     #[arg(short, long, default_value = "1024")]
     threads: u32,
@@ -66,9 +62,6 @@ fn parse_condition(args: &Args) -> anyhow::Result<u64> {
     } else if let Some(zeros) = args.leading_zeros {
         info!("搜索条件: 前导零至少 {} 个", zeros);
         parse_leading_zeros_condition(zeros)
-    } else if let Some(zeros) = args.leading_zeros_exact {
-        info!("搜索条件: 前导零精确 {} 个", zeros);
-        parse_leading_zeros_exact_condition(zeros)
     } else {
         // 默认搜索前缀 8888
         info!("搜索条件: 默认前缀匹配 8888");

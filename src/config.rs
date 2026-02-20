@@ -72,13 +72,15 @@ impl ConditionType {
 /// 
 /// 将十六进制字符串解析为字节序列。
 /// 输入应为十六进制字符（0-9, a-f, A-F）。
-/// 每个字符会被重复一次，例如："888" -> "888888" -> [0x88, 0x88, 0x88]
+/// 如果长度为奇数，在后面补最后一个字符变成偶数长度。
+/// 例如："888" -> "8888" -> [0x88, 0x88]；"88888" -> "888888" -> [0x88, 0x88, 0x88]
 /// 
 /// # Example
 /// ```
 /// use rust_profanity::parse_prefix_condition;
-/// let condition = parse_prefix_condition("8888").unwrap();  // [0x88, 0x88, 0x88, 0x88]
-/// let condition2 = parse_prefix_condition("888").unwrap();  // [0x88, 0x88, 0x88]
+/// let condition = parse_prefix_condition("8888").unwrap();   // [0x88, 0x88]
+/// let condition2 = parse_prefix_condition("888").unwrap();   // [0x88, 0x88]（补一个8）
+/// let condition3 = parse_prefix_condition("88888").unwrap(); // [0x88, 0x88, 0x88]（补一个8）
 /// ```
 pub fn parse_prefix_condition(prefix: &str) -> anyhow::Result<u64> {
     let hex_str = prefix.trim_start_matches("0x");
@@ -88,16 +90,19 @@ pub fn parse_prefix_condition(prefix: &str) -> anyhow::Result<u64> {
         anyhow::bail!("Prefix must contain only hexadecimal characters (0-9, a-f, A-F)");
     }
     
-    // 将每个字符重复一次，然后解析
-    // 例如："888" -> "888888" -> [0x88, 0x88, 0x88]
-    let expanded_hex: String = hex_str.chars()
-        .map(|c| format!("{}{}", c, c))
-        .collect::<String>();
+    // 如果长度为奇数，在后面补最后一个字符变成偶数长度
+    // 例如："888" -> "8888"；"88888" -> "888888"
+    let expanded_hex = if hex_str.len() % 2 == 1 {
+        let last_char = hex_str.chars().last().unwrap();
+        format!("{}{}", hex_str, last_char)
+    } else {
+        hex_str.to_string()
+    };
     
     let bytes = hex::decode(&expanded_hex)?;
     
     if bytes.len() > 6 {
-        anyhow::bail!("Prefix too long, max 6 characters (6 hex digits)");
+        anyhow::bail!("Prefix too long, max 12 hex characters (6 bytes)");
     }
     
     let mut param: u64 = 0;
