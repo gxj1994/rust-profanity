@@ -77,31 +77,31 @@ void seed_to_master_key(const seed_t* seed, uchar master_key[64]) {
     hmac_sha512_bip32(key, 12, seed->bytes, 64, master_key);
 }
 
-// 从字节数组加载 uint256 (小端序)
+// 从字节数组加载 uint256 (大端序 - BIP32标准)
 void uint256_from_bytes_mnemonic(const uchar bytes[32], ulong result[4]) {
     for (int i = 0; i < 4; i++) {
-        result[i] = ((ulong)bytes[i * 8]) |
-                   ((ulong)bytes[i * 8 + 1] << 8) |
-                   ((ulong)bytes[i * 8 + 2] << 16) |
-                   ((ulong)bytes[i * 8 + 3] << 24) |
-                   ((ulong)bytes[i * 8 + 4] << 32) |
-                   ((ulong)bytes[i * 8 + 5] << 40) |
-                   ((ulong)bytes[i * 8 + 6] << 48) |
-                   ((ulong)bytes[i * 8 + 7] << 56);
+        result[3 - i] = ((ulong)bytes[i * 8] << 56) |
+                       ((ulong)bytes[i * 8 + 1] << 48) |
+                       ((ulong)bytes[i * 8 + 2] << 40) |
+                       ((ulong)bytes[i * 8 + 3] << 32) |
+                       ((ulong)bytes[i * 8 + 4] << 24) |
+                       ((ulong)bytes[i * 8 + 5] << 16) |
+                       ((ulong)bytes[i * 8 + 6] << 8) |
+                       ((ulong)bytes[i * 8 + 7]);
     }
 }
 
-// 将 uint256 保存到字节数组 (小端序)
+// 将 uint256 保存到字节数组 (大端序 - BIP32标准)
 void uint256_to_bytes_mnemonic(const ulong value[4], uchar bytes[32]) {
     for (int i = 0; i < 4; i++) {
-        bytes[i * 8] = (uchar)(value[i]);
-        bytes[i * 8 + 1] = (uchar)(value[i] >> 8);
-        bytes[i * 8 + 2] = (uchar)(value[i] >> 16);
-        bytes[i * 8 + 3] = (uchar)(value[i] >> 24);
-        bytes[i * 8 + 4] = (uchar)(value[i] >> 32);
-        bytes[i * 8 + 5] = (uchar)(value[i] >> 40);
-        bytes[i * 8 + 6] = (uchar)(value[i] >> 48);
-        bytes[i * 8 + 7] = (uchar)(value[i] >> 56);
+        bytes[i * 8] = (uchar)(value[3 - i] >> 56);
+        bytes[i * 8 + 1] = (uchar)(value[3 - i] >> 48);
+        bytes[i * 8 + 2] = (uchar)(value[3 - i] >> 40);
+        bytes[i * 8 + 3] = (uchar)(value[3 - i] >> 32);
+        bytes[i * 8 + 4] = (uchar)(value[3 - i] >> 24);
+        bytes[i * 8 + 5] = (uchar)(value[3 - i] >> 16);
+        bytes[i * 8 + 6] = (uchar)(value[3 - i] >> 8);
+        bytes[i * 8 + 7] = (uchar)(value[3 - i]);
     }
 }
 
@@ -163,9 +163,21 @@ void derive_child_key(const uchar parent_key[64], uint index, uchar child_key[64
             data[i + 1] = parent_key[i];  // 父私钥
         }
     } else {
-        // 普通派生未实现 (当前只使用硬化派生)
-        // 标准以太坊路径 m/44'/60'/0'/0/0 全部使用硬化派生
-        return;
+        // 普通派生: 使用 压缩父公钥 || 索引
+        // 需要先计算父公钥
+        uchar parent_public[65];
+        private_to_public(parent_key, parent_public);
+        
+        // BIP32普通派生使用33字节压缩公钥
+        // 格式: 0x02(偶数Y) 或 0x03(奇数Y) + X坐标(32字节)
+        // 从完整公钥中提取Y的最低位来判断奇偶
+        uchar y_lsb = parent_public[64];  // Y坐标的最后一个字节
+        data[0] = (y_lsb & 1) ? 0x03 : 0x02;  // 奇数Y用0x03，偶数Y用0x02
+        
+        // 复制X坐标 (32字节)
+        for (int i = 0; i < 32; i++) {
+            data[i + 1] = parent_public[i + 1];  // 跳过0x04前缀
+        }
     }
     
     // 添加索引 (大端序)
