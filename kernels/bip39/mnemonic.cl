@@ -29,7 +29,7 @@ __constant uint DERIVATION_PATH[5] = {
 // 将助记词转换为标准BIP39字符串
 // 单词之间用空格分隔
 // 返回字符串长度
-uchar mnemonic_to_string(const mnemonic_t* mnemonic, uchar* output, uchar max_len) {
+static uchar mnemonic_to_string(const mnemonic_t* mnemonic, uchar* output, uchar max_len) {
     uchar pos = 0;
     
     for (int i = 0; i < 24; i++) {
@@ -53,7 +53,7 @@ uchar mnemonic_to_string(const mnemonic_t* mnemonic, uchar* output, uchar max_le
 // password: 助记词字符串 (单词之间用空格分隔)
 // salt: "mnemonic" + 可选密码
 // 迭代次数: 2048
-void mnemonic_to_seed(const mnemonic_t* mnemonic, seed_t* seed) {
+static void mnemonic_to_seed(const mnemonic_t* mnemonic, seed_t* seed) {
     // 构建助记词字符串 (最大约 24 * 8 + 23 = 215 字节)
     uchar password[256];
     // 初始化数组以避免未定义行为
@@ -70,19 +70,19 @@ void mnemonic_to_seed(const mnemonic_t* mnemonic, seed_t* seed) {
 }
 
 // HMAC-SHA512 用于 BIP32
-void hmac_sha512_bip32(const uchar* key, uint key_len, const uchar* data, uint data_len, uchar result[64]) {
+static void hmac_sha512_bip32(const uchar* key, uint key_len, const uchar* data, uint data_len, uchar result[64]) {
     hmac_sha512(key, key_len, data, data_len, result);
 }
 
 // 从种子生成主密钥 (BIP32)
 // 返回 64 字节: 前 32 字节是主私钥，后 32 字节是主链码
-void seed_to_master_key(const seed_t* seed, uchar master_key[64]) {
+static void seed_to_master_key(const seed_t* seed, uchar master_key[64]) {
     const uchar key[] = {'B', 'i', 't', 'c', 'o', 'i', 'n', ' ', 's', 'e', 'e', 'd'};
     hmac_sha512_bip32(key, 12, seed->bytes, 64, master_key);
 }
 
 // 从字节数组加载 uint256 (大端序 - BIP32标准)
-void uint256_from_bytes_mnemonic(const uchar bytes[32], ulong result[4]) {
+static void uint256_from_bytes_mnemonic(const uchar bytes[32], ulong result[4]) {
     for (int i = 0; i < 4; i++) {
         result[3 - i] = ((ulong)bytes[i * 8] << 56) |
                        ((ulong)bytes[i * 8 + 1] << 48) |
@@ -96,7 +96,7 @@ void uint256_from_bytes_mnemonic(const uchar bytes[32], ulong result[4]) {
 }
 
 // 将 uint256 保存到字节数组 (大端序 - BIP32标准)
-void uint256_to_bytes_mnemonic(const ulong value[4], uchar bytes[32]) {
+static void uint256_to_bytes_mnemonic(const ulong value[4], uchar bytes[32]) {
     for (int i = 0; i < 4; i++) {
         bytes[i * 8] = (uchar)(value[3 - i] >> 56);
         bytes[i * 8 + 1] = (uchar)(value[3 - i] >> 48);
@@ -109,30 +109,35 @@ void uint256_to_bytes_mnemonic(const ulong value[4], uchar bytes[32]) {
     }
 }
 
-// 比较两个 uint256 (小端序)
-int uint256_cmp_mnemonic(const ulong a[4], const ulong b[4]) {
-    for (int i = 3; i >= 0; i--) {
+// 比较两个 uint256 (大端序 - 从最高有效位开始比较)
+static int uint256_cmp_mnemonic(const ulong a[4], const ulong b[4]) {
+    for (int i = 0; i < 4; i++) {
         if (a[i] < b[i]) return -1;
         if (a[i] > b[i]) return 1;
     }
     return 0;
 }
 
-// secp256k1 阶 n (小端序)
+// secp256k1 阶 n (大端序 - 与 uint256_from_bytes_mnemonic 一致)
 // n = FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141
 __constant ulong SECP256K1_N_MNEMONIC[4] = {
-    0xBFD25E8CD0364141ULL, 0xBAAEDCE6AF48A03BULL,
-    0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFEULL
+    0xFFFFFFFFFFFFFFFFULL,  // 最高 64 位
+    0xFFFFFFFFFFFFFFFEULL,
+    0xBAAEDCE6AF48A03BULL,
+    0xBFD25E8CD0364141ULL   // 最低 64 位
 };
 
 // 模加: result = (a + b) mod n
-void mod_add_n_mnemonic(const ulong a[4], const ulong b[4], ulong result[4]) {
+static void mod_add_n_mnemonic(const ulong a[4], const ulong b[4], ulong result[4]) {
     ulong carry = 0;
-    ulong sum;
     
-    for (int i = 0; i < 4; i++) {
-        sum = a[i] + b[i] + carry;
-        carry = (sum < a[i]) || (sum == a[i] && carry);
+    // 从最低有效位开始加法（索引 3）
+    for (int i = 3; i >= 0; i--) {
+        ulong sum = a[i] + b[i];
+        ulong new_carry = (sum < a[i]) ? 1UL : 0UL;
+        sum += carry;
+        if (sum < carry) new_carry++;
+        carry = new_carry;
         result[i] = sum;
     }
     
@@ -144,10 +149,10 @@ void mod_add_n_mnemonic(const ulong a[4], const ulong b[4], ulong result[4]) {
     }
     
     if (carry || uint256_cmp_mnemonic(result, n_local) >= 0) {
-        carry = 0;
-        for (int i = 0; i < 4; i++) {
-            ulong diff = result[i] - n_local[i] - carry;
-            carry = (result[i] < n_local[i] + carry) ? 1 : 0;
+        ulong borrow = 0;
+        for (int i = 3; i >= 0; i--) {
+            ulong diff = result[i] - n_local[i] - borrow;
+            borrow = (result[i] < n_local[i] + borrow) ? 1UL : 0UL;
             result[i] = diff;
         }
     }
@@ -157,7 +162,7 @@ void mod_add_n_mnemonic(const ulong a[4], const ulong b[4], ulong result[4]) {
 // parent_key: 64 字节 (32 字节私钥 + 32 字节链码)
 // index: 派生索引 (>= 0x80000000 表示硬化派生)
 // child_key: 输出 64 字节
-void derive_child_key(const uchar parent_key[64], uint index, uchar child_key[64]) {
+static void derive_child_key(const uchar parent_key[64], uint index, uchar child_key[64]) {
     uchar data[37];
     
     if (index >= 0x80000000) {
@@ -215,7 +220,7 @@ void derive_child_key(const uchar parent_key[64], uint index, uchar child_key[64
 }
 
 // 完整的派生路径
-void derive_path(const seed_t* seed, const uint* path, uint path_len, uchar private_key[32]) {
+static void derive_path(const seed_t* seed, const uint* path, uint path_len, uchar private_key[32]) {
     uchar master_key[64];
     seed_to_master_key(seed, master_key);
     
@@ -235,7 +240,7 @@ void derive_path(const seed_t* seed, const uint* path, uint path_len, uchar priv
 }
 
 // 获取以太坊私钥 (标准派生路径 m/44'/60'/0'/0/0)
-void get_ethereum_private_key(const mnemonic_t* mnemonic, uchar private_key[32]) {
+static void get_ethereum_private_key(const mnemonic_t* mnemonic, uchar private_key[32]) {
     seed_t seed;
     mnemonic_to_seed(mnemonic, &seed);
     
@@ -249,7 +254,7 @@ void get_ethereum_private_key(const mnemonic_t* mnemonic, uchar private_key[32])
 }
 
 // 兼容接口: local_mnemonic_t 类型在 search.cl 中定义
-void get_ethereum_private_key_local(const local_mnemonic_t* mnemonic, uchar private_key[32]) {
+static void get_ethereum_private_key_local(const local_mnemonic_t* mnemonic, uchar private_key[32]) {
     mnemonic_t mn;
     for (int i = 0; i < 24; i++) {
         mn.words[i] = mnemonic->words[i];

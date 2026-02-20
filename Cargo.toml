@@ -24,3 +24,5 @@ hex = "0.4"
 
 [dev-dependencies]
 pretty_assertions = "1.4"
+num-bigint = "0.4"
+num-traits = "0.2"

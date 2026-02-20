@@ -1741,3 +1741,240 @@ fn test_bip32_first_derivation() {
     println!("期望的最终私钥: {}", expected_privkey);
     println!("匹配: {}", hex::encode(child_final.private_key().to_bytes()) == expected_privkey);
 }
+
+/// 详细调试 BIP32 每一步派生
+#[test]
+fn test_bip32_step_by_step_debug() {
+    use ocl::{ProQue, Buffer, MemFlags};
+    use hmac::{Hmac, Mac};
+    use sha2::Sha512;
+    
+    // 种子
+    let seed_hex = "408b285c123836004f4b8842c89324c1f01382450c0d439af345ba7fc49acf705489c6fc77dbd4e3dc1dd8cc6bc9f043db8ada1e243c4a0eafb290d399480840";
+    let seed = hex::decode(seed_hex).unwrap();
+    
+    println!("========================================");
+    println!("BIP32 逐步调试 - 对比 OpenCL 和 Rust");
+    println!("========================================");
+    println!("种子: {}", seed_hex);
+    
+    // Rust 计算主密钥
+    type HmacSha512 = Hmac<Sha512>;
+    let mut mac = HmacSha512::new_from_slice(b"Bitcoin seed").unwrap();
+    mac.update(&seed);
+    let master_key = mac.finalize().into_bytes();
+    
+    println!("\n1. 主密钥生成:");
+    println!("   主私钥: {}", hex::encode(&master_key[..32]));
+    println!("   主链码: {}", hex::encode(&master_key[32..]));
+    
+    // 第一步派生: m/44' ( hardened )
+    let index_44 = 0x8000002Cu32;
+    let mut data_44 = vec![0u8; 37];
+    data_44[0] = 0x00;
+    data_44[1..33].copy_from_slice(&master_key[..32]);
+    data_44[33..37].copy_from_slice(&index_44.to_be_bytes());
+    
+    println!("\n2. 第一步派生 m/44':");
+    println!("   索引: 0x{:08x} ({})", index_44, index_44);
+    println!("   HMAC 数据 (37字节): {}", hex::encode(&data_44));
+    
+    let mut mac = HmacSha512::new_from_slice(&master_key[32..]).unwrap();
+    mac.update(&data_44);
+    let hmac_44 = mac.finalize().into_bytes();
+    println!("   HMAC结果 (64字节): {}", hex::encode(&hmac_44));
+    println!("   HMAC左半 (32字节): {}", hex::encode(&hmac_44[..32]));
+    println!("   HMAC右半 (32字节): {}", hex::encode(&hmac_44[32..]));
+    
+    // 加载OpenCL内核
+    let mut source = String::new();
+    source.push_str(include_str!("../kernels/crypto/sha512.cl"));
+    source.push('\n');
+    source.push_str(include_str!("../kernels/crypto/secp256k1.cl"));
+    source.push('\n');
+    source.push_str(include_str!("../kernels/utils/condition.cl"));
+    source.push('\n');
+    source.push_str(include_str!("../kernels/bip39/mnemonic.cl"));
+    source.push('\n');
+    
+    // 添加调试内核
+    source.push_str(r#"
+// 调试内核: 测试单步派生
+__kernel void test_single_derivation(
+    __constant uchar* parent_key,   // 64 bytes: priv + chain
+    uint index,
+    __global uchar* hmac_out,       // 64 bytes HMAC result
+    __global uchar* child_out       // 64 bytes child key
+) {
+    // 复制父密钥到本地
+    uchar local_parent[64];
+    for (int i = 0; i < 64; i++) {
+        local_parent[i] = parent_key[i];
+    }
+    
+    // 准备HMAC数据
+    uchar data[37];
+    data[0] = 0x00;
+    for (int i = 0; i < 32; i++) {
+        data[i + 1] = local_parent[i];
+    }
+    data[33] = (uchar)(index >> 24);
+    data[34] = (uchar)(index >> 16);
+    data[35] = (uchar)(index >> 8);
+    data[36] = (uchar)index;
+    
+    // 计算HMAC
+    uchar hmac_result[64];
+    hmac_sha512_bip32(local_parent + 32, 32, data, 37, hmac_result);
+    
+    // 输出HMAC结果
+    for (int i = 0; i < 64; i++) {
+        hmac_out[i] = hmac_result[i];
+    }
+    
+    // 派生子密钥
+    derive_child_key(local_parent, index, child_out);
+}
+
+// 调试内核: 测试模加
+__kernel void test_mod_add(
+    __constant uchar* a_bytes,  // 32 bytes
+    __constant uchar* b_bytes,  // 32 bytes
+    __global uchar* result      // 32 bytes
+) {
+    ulong a[4], b[4], res[4];
+    uint256_from_bytes_mnemonic(a_bytes, a);
+    uint256_from_bytes_mnemonic(b_bytes, b);
+    mod_add_n_mnemonic(a, b, res);
+    uint256_to_bytes_mnemonic(res, result);
+}
+"#);
+    
+    let proque = match ProQue::builder()
+        .src(&source)
+        .dims(1)
+        .build() {
+        Ok(p) => p,
+        Err(e) => {
+            println!("OpenCL 不可用，跳过测试: {}", e);
+            return;
+        }
+    };
+    
+    // 测试单步派生
+    let parent_buffer = Buffer::<u8>::builder()
+        .queue(proque.queue().clone())
+        .flags(MemFlags::READ_ONLY)
+        .len(64)
+        .copy_host_slice(&master_key[..])
+        .build()
+        .expect("创建父密钥缓冲区失败");
+    
+    let hmac_buffer = Buffer::<u8>::builder()
+        .queue(proque.queue().clone())
+        .flags(MemFlags::WRITE_ONLY)
+        .len(64)
+        .build()
+        .expect("创建HMAC缓冲区失败");
+    
+    let child_buffer = Buffer::<u8>::builder()
+        .queue(proque.queue().clone())
+        .flags(MemFlags::WRITE_ONLY)
+        .len(64)
+        .build()
+        .expect("创建子密钥缓冲区失败");
+    
+    let kernel = proque.kernel_builder("test_single_derivation")
+        .arg(&parent_buffer)
+        .arg(index_44)
+        .arg(&hmac_buffer)
+        .arg(&child_buffer)
+        .build()
+        .expect("创建内核失败");
+    
+    unsafe {
+        kernel.enq().expect("执行内核失败");
+    }
+    
+    let mut cl_hmac = vec![0u8; 64];
+    let mut cl_child = vec![0u8; 64];
+    hmac_buffer.read(&mut cl_hmac).enq().expect("读取HMAC失败");
+    child_buffer.read(&mut cl_child).enq().expect("读取子密钥失败");
+    
+    println!("\n   OpenCL HMAC结果: {}", hex::encode(&cl_hmac));
+    println!("   OpenCL HMAC左半: {}", hex::encode(&cl_hmac[..32]));
+    println!("   OpenCL HMAC右半: {}", hex::encode(&cl_hmac[32..]));
+    println!("   HMAC匹配: {}", cl_hmac == hmac_44.as_slice());
+    
+    println!("\n   OpenCL 子私钥: {}", hex::encode(&cl_child[..32]));
+    println!("   OpenCL 子链码: {}", hex::encode(&cl_child[32..]));
+    
+    // 测试模加
+    println!("\n3. 测试模加运算:");
+    let a_bytes = hex::decode("235b34cd7c9f6d7e4595ffe9ae4b1cb5606df8aca2b527d20a07c8f56b2342f4").unwrap();
+    let b_bytes = hex::decode(&hmac_44[..32]).unwrap();
+    
+    println!("   父私钥 (a): {}", hex::encode(&a_bytes));
+    println!("   HMAC左半 (b): {}", hex::encode(&b_bytes));
+    
+    let a_buffer = Buffer::<u8>::builder()
+        .queue(proque.queue().clone())
+        .flags(MemFlags::READ_ONLY)
+        .len(32)
+        .copy_host_slice(&a_bytes)
+        .build()
+        .expect("创建a缓冲区失败");
+    
+    let b_buffer = Buffer::<u8>::builder()
+        .queue(proque.queue().clone())
+        .flags(MemFlags::READ_ONLY)
+        .len(32)
+        .copy_host_slice(&b_bytes)
+        .build()
+        .expect("创建b缓冲区失败");
+    
+    let result_buffer = Buffer::<u8>::builder()
+        .queue(proque.queue().clone())
+        .flags(MemFlags::WRITE_ONLY)
+        .len(32)
+        .build()
+        .expect("创建结果缓冲区失败");
+    
+    let mod_kernel = proque.kernel_builder("test_mod_add")
+        .arg(&a_buffer)
+        .arg(&b_buffer)
+        .arg(&result_buffer)
+        .build()
+        .expect("创建模加内核失败");
+    
+    unsafe {
+        mod_kernel.enq().expect("执行模加内核失败");
+    }
+    
+    let mut cl_mod_result = vec![0u8; 32];
+    result_buffer.read(&mut cl_mod_result).enq().expect("读取模加结果失败");
+    
+    println!("   OpenCL 模加结果: {}", hex::encode(&cl_mod_result));
+    
+    // Rust 计算模加 (使用大整数)
+    use num_bigint::BigUint;
+    use num_traits::Num;
+    
+    let n_hex = "fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141";
+    let n = BigUint::from_str_radix(n_hex, 16).unwrap();
+    
+    let a_int = BigUint::from_bytes_be(&a_bytes);
+    let b_int = BigUint::from_bytes_be(&b_bytes);
+    let sum_int = (&a_int + &b_int) % &n;
+    
+    let mut rust_result = sum_int.to_bytes_be();
+    // 确保32字节
+    while rust_result.len() < 32 {
+        rust_result.insert(0, 0);
+    }
+    
+    println!("   Rust   模加结果: {}", hex::encode(&rust_result));
+    println!("   模加结果匹配: {}", cl_mod_result == rust_result);
+    
+    println!("\n========================================");
+}
