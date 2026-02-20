@@ -20,8 +20,8 @@ __constant ulong KECCAK_RC[24] = {
     0x0000000080000001ULL, 0x8000000080008008ULL
 };
 
-// 旋转左移
-ulong keccak_rotl(ulong x, uint n) {
+// 旋转左移 - 使用手动实现避免 rotate 函数歧义
+inline ulong keccak_rotl(ulong x, uint n) {
     return (x << n) | (x >> (64 - n));
 }
 

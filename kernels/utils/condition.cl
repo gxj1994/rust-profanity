@@ -13,7 +13,7 @@
 // 比较前缀
 // param: 要匹配的前缀字节 (最多6字节)，按大端序存储
 // 例如：匹配 "888" 时，param = 0x0000000000383838 (3字节)
-bool compare_prefix(const uchar address[20], ulong param) {
+inline bool compare_prefix(const uchar address[20], ulong param) {
     // 确定 param 的有效字节数
     ulong temp = param;
     uint param_bytes = 0;
@@ -26,7 +26,7 @@ bool compare_prefix(const uchar address[20], ulong param) {
     
     // 直接逐字节比较地址的前 param_bytes 字节
     // param 是大端序存储，最高有效字节在低位地址
-    for (int i = 0; i < param_bytes; i++) {
+    for (uint i = 0; i < param_bytes; i++) {
         // 从 param 中提取第 i 个字节（从最高有效字节开始）
         int shift = (param_bytes - 1 - i) * 8;
         uchar expected_byte = (param >> shift) & 0xFF;
@@ -40,7 +40,7 @@ bool compare_prefix(const uchar address[20], ulong param) {
 
 // 比较后缀
 // param: 要匹配的后缀字节 (最多6字节)，按大端序存储
-bool compare_suffix(const uchar address[20], ulong param) {
+inline bool compare_suffix(const uchar address[20], ulong param) {
     // 确定 param 的有效字节数
     ulong temp = param;
     uint param_bytes = 0;
@@ -53,7 +53,7 @@ bool compare_suffix(const uchar address[20], ulong param) {
     
     // 直接逐字节比较地址的后 param_bytes 字节
     // address[20 - param_bytes] 到 address[19] 是后缀部分
-    for (int i = 0; i < param_bytes; i++) {
+    for (uint i = 0; i < param_bytes; i++) {
         // 从 param 中提取第 i 个字节（从最高有效字节开始）
         int shift = (param_bytes - 1 - i) * 8;
         uchar expected_byte = (param >> shift) & 0xFF;
@@ -67,7 +67,7 @@ bool compare_suffix(const uchar address[20], ulong param) {
 
 // 统计前导零十六进制字符数
 // 每个字节 = 2 个十六进制字符
-uint count_leading_zeros(const uchar address[20]) {
+inline uint count_leading_zeros(const uchar address[20]) {
     uint count = 0;
     for (int i = 0; i < 20; i++) {
         uchar byte = address[i];
@@ -84,7 +84,7 @@ uint count_leading_zeros(const uchar address[20]) {
 }
 
 // 检查条件
-bool check_condition(const uchar address[20], ulong condition) {
+inline bool check_condition(const uchar address[20], ulong condition) {
     ushort type = (condition >> 48) & 0xFFFF;
     ulong param = condition & 0xFFFFFFFFFFFFULL;
     

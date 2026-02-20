@@ -75,11 +75,12 @@ __kernel void search_kernel(
     uint tid = get_global_id(0);
     if (tid >= config->num_threads) return;
     
-    // 复制基础熵到本地内存 (使用 ulong 指针批量复制)
+    // 复制基础熵到本地内存 (使用 uchar16 向量类型优化)
     uchar local_entropy[32];
-    __constant ulong* src = (__constant ulong*)config->base_entropy;
-    ulong* dst = (ulong*)local_entropy;
-    dst[0] = src[0]; dst[1] = src[1]; dst[2] = src[2]; dst[3] = src[3];
+    __constant uchar16* src16 = (__constant uchar16*)config->base_entropy;
+    uchar16* dst16 = (uchar16*)local_entropy;
+    dst16[0] = src16[0];
+    dst16[1] = src16[1];
     
     // 设置本线程的起始偏移
     // 每个线程从 tid 步进开始，步长为 num_threads
@@ -105,10 +106,10 @@ __kernel void search_kernel(
             int old_val = atomic_cmpxchg(g_found_flag, 0, 1);
             if (old_val == 0) {
                 result->found = 1;
-                // 保存熵 (使用 ulong 指针批量复制)
-                ulong* result_entropy = (ulong*)result->result_entropy;
-                result_entropy[0] = dst[0]; result_entropy[1] = dst[1];
-                result_entropy[2] = dst[2]; result_entropy[3] = dst[3];
+                // 保存熵 (使用 uchar16 向量类型优化)
+                uchar16* result_entropy16 = (uchar16*)result->result_entropy;
+                result_entropy16[0] = dst16[0];
+                result_entropy16[1] = dst16[1];
                 
                 // 保存地址 (使用 ulong + uint 批量复制)
                 *((ulong*)result->eth_address) = *((ulong*)address);
