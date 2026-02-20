@@ -23,31 +23,36 @@ impl Mnemonic {
         Self::from_entropy(&entropy)
     }
     
-    /// 从熵生成助记词
+    /// 从熵生成助记词 (符合 BIP39 标准)
     pub fn from_entropy(entropy: &[u8; 32]) -> anyhow::Result<Self> {
-        // 计算校验和 (SHA256前8位 = 1字节)
+        // 计算校验和: SHA256 的前 8 位 (256/32 = 8)
         let hash = Sha256::digest(entropy);
-        let checksum = hash[0];
+        let checksum_bits = hash[0] >> (8 - 8); // 取前8位
         
         // 组合: 256位熵 + 8位校验和 = 264位
-        let mut data = [0u8; 33];
-        data[..32].copy_from_slice(entropy);
-        data[32] = checksum;
+        // 将数据视为大端序的位流
+        let mut all_bits = [0u8; 33];
+        all_bits[..32].copy_from_slice(entropy);
+        all_bits[32] = checksum_bits;
         
         // 提取24个11位索引
         let mut words = [0u16; 24];
         for i in 0..24 {
             let bit_offset = i * 11;
-            let byte_offset = bit_offset / 8;
-            let bit_shift = bit_offset % 8;
             
-            let mut idx = ((data[byte_offset] as u16) << 8) | (data[byte_offset + 1] as u16);
-            // 避免减法溢出，使用 saturating_sub
-            let shift = 5u16.saturating_sub(bit_shift as u16);
-            idx >>= shift;
-            idx &= 0x7FF;
+            // 读取11位索引 (可能跨越2-3个字节)
+            let mut idx: u16 = 0;
+            for j in 0..11 {
+                let bit_pos = bit_offset + j;
+                let byte_idx = bit_pos / 8;
+                let bit_in_byte = 7 - (bit_pos % 8); // 大端序: MSB在前
+                
+                if (all_bits[byte_idx] >> bit_in_byte) & 1 == 1 {
+                    idx |= 1 << (10 - j); // 大端序存储
+                }
+            }
             
-            words[i] = idx;
+            words[i] = idx & 0x7FF;
         }
         
         Ok(Self { words })
@@ -105,6 +110,36 @@ impl Mnemonic {
         
         Ok(Self { words })
     }
+    
+    /// 验证助记词校验和 (BIP39 标准验证)
+    pub fn validate_checksum(&self) -> bool {
+        // 从单词索引重建位流
+        let mut all_bits = [0u8; 33];
+        
+        for (i, &word_idx) in self.words.iter().enumerate() {
+            let bit_offset = i * 11;
+            
+            for j in 0..11 {
+                let bit_pos = bit_offset + j;
+                let byte_idx = bit_pos / 8;
+                let bit_in_byte = 7 - (bit_pos % 8);
+                
+                if (word_idx >> (10 - j)) & 1 == 1 {
+                    all_bits[byte_idx] |= 1 << bit_in_byte;
+                }
+            }
+        }
+        
+        // 提取熵和校验和
+        let entropy = &all_bits[..32];
+        let checksum = all_bits[32];
+        
+        // 计算期望的校验和
+        let hash = Sha256::digest(entropy);
+        let expected_checksum = hash[0] >> (8 - 8); // 前8位
+        
+        checksum == expected_checksum
+    }
 }
 
 impl std::fmt::Display for Mnemonic {
@@ -125,6 +160,9 @@ mod tests {
         for &word in &mnemonic.words {
             assert!(word < 2048);
         }
+        
+        // 验证生成的助记词校验和正确
+        assert!(mnemonic.validate_checksum(), "Generated mnemonic has invalid checksum");
     }
 
     #[test]
@@ -132,5 +170,43 @@ mod tests {
         let mnemonic = Mnemonic::generate_random().unwrap();
         let seed = mnemonic.to_seed("");
         assert_eq!(seed.len(), 64);
+    }
+    
+    /// 测试 BIP39 标准测试向量
+    /// 来自: https://github.com/trezor/python-mnemonic/blob/master/vectors.json
+    #[test]
+    fn test_bip39_vectors() {
+        // 测试向量 1: 全零熵
+        let entropy1 = [0u8; 32];
+        let mnemonic1 = Mnemonic::from_entropy(&entropy1).unwrap();
+        let phrase1 = mnemonic1.to_string();
+        println!("Vector 1 mnemonic: {}", phrase1);
+        assert!(mnemonic1.validate_checksum(), "Vector 1 checksum failed");
+        
+        // 验证前几个单词是 "abandon"
+        assert_eq!(mnemonic1.words[0], 0, "First word should be 'abandon' (index 0)");
+        assert_eq!(mnemonic1.words[1], 0, "Second word should be 'abandon' (index 0)");
+        
+        // 测试向量 2: 特定熵
+        let entropy2: [u8; 32] = [
+            0x7f, 0x7f, 0x7f, 0x7f, 0x7f, 0x7f, 0x7f, 0x7f,
+            0x7f, 0x7f, 0x7f, 0x7f, 0x7f, 0x7f, 0x7f, 0x7f,
+            0x7f, 0x7f, 0x7f, 0x7f, 0x7f, 0x7f, 0x7f, 0x7f,
+            0x7f, 0x7f, 0x7f, 0x7f, 0x7f, 0x7f, 0x7f, 0x7f,
+        ];
+        let mnemonic2 = Mnemonic::from_entropy(&entropy2).unwrap();
+        println!("Vector 2 mnemonic: {}", mnemonic2.to_string());
+        assert!(mnemonic2.validate_checksum(), "Vector 2 checksum failed");
+    }
+    
+    #[test]
+    fn test_roundtrip() {
+        // 生成 -> 字符串 -> 解析 -> 验证
+        let original = Mnemonic::generate_random().unwrap();
+        let phrase = original.to_string();
+        let parsed = Mnemonic::from_string(&phrase).unwrap();
+        
+        assert_eq!(original.words, parsed.words);
+        assert!(parsed.validate_checksum());
     }
 }

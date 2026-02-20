@@ -7,9 +7,9 @@ use crate::config::{SearchConfig, SearchResult};
 use super::context::OpenCLContext;
 
 /// 搜索内核封装
-#[warn(dead_code)]
 pub struct SearchKernel {
-    /// OpenCL 程序
+    /// OpenCL 程序 (必须保持存活以确保内核正常工作)
+    #[allow(dead_code)]
     program: Program,
     /// 搜索内核
     kernel: Kernel,

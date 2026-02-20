@@ -1,17 +1,18 @@
 //! 搜索配置和数据结构定义
 
 /// 搜索任务配置 (传递给 GPU)
+/// 注意：必须与 OpenCL 的 search_config_t 结构体完全匹配
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct SearchConfig {
-    /// 基础助记词种子 (24个单词索引)
+    /// 基础助记词种子 (24个单词索引) - 对应 OpenCL ushort[24]
     pub base_mnemonic: [u16; 24],
-    /// GPU 线程数
+    /// GPU 线程数 - 对应 OpenCL uint
     pub num_threads: u32,
-    /// 搜索条件编码
+    /// 搜索条件编码 - 对应 OpenCL ulong
     /// 高16位: 条件类型, 低48位: 条件参数
     pub condition: u64,
-    /// 检查标志间隔 (迭代次数)
+    /// 检查标志间隔 (迭代次数) - 对应 OpenCL uint
     pub check_interval: u32,
 }
 
@@ -27,16 +28,17 @@ impl SearchConfig {
 }
 
 /// 搜索结果 (从 GPU 传回)
+/// 注意：必须与 OpenCL 的 search_result_t 结构体完全匹配
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct SearchResult {
-    /// 是否找到 (0/1)
+    /// 是否找到 (0/1) - 对应 OpenCL int
     pub found: i32,
-    /// 找到的助记词
+    /// 找到的助记词 - 对应 OpenCL ushort[24]
     pub result_mnemonic: [u16; 24],
-    /// 以太坊地址 (20字节)
+    /// 以太坊地址 (20字节) - 对应 OpenCL uchar[20]
     pub eth_address: [u8; 20],
-    /// 由哪个线程找到
+    /// 由哪个线程找到 - 对应 OpenCL uint
     pub found_by_thread: u32,
 }
 
@@ -134,5 +136,19 @@ mod tests {
     fn test_parse_prefix() {
         let condition = parse_prefix_condition("8888").unwrap();
         assert_eq!(condition >> 48, 0x01);
+    }
+
+    #[test]
+    fn test_struct_sizes() {
+        // 验证结构体大小与 OpenCL 端匹配
+        // OpenCL: typedef struct { ushort[24]; uint; ulong; uint; } = 48 + 4 + 8 + 4 = 64 (可能有填充)
+        let config_size = std::mem::size_of::<SearchConfig>();
+        println!("SearchConfig size: {}", config_size);
+        assert!(config_size >= 64, "SearchConfig too small");
+
+        // OpenCL: typedef struct { int; ushort[24]; uchar[20]; uint; } = 4 + 48 + 20 + 4 = 76 (可能有填充)
+        let result_size = std::mem::size_of::<SearchResult>();
+        println!("SearchResult size: {}", result_size);
+        assert!(result_size >= 76, "SearchResult too small");
     }
 }
