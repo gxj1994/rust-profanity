@@ -43,7 +43,7 @@ struct Args {
     work_group_size: usize,
     
     /// 轮询间隔 (毫秒)
-    #[arg(long, default_value = "100")]
+    #[arg(long, default_value = "1000")]
     poll_interval: u64,
     
     /// 超时时间 (秒，0表示无超时)
