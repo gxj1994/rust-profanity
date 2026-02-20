@@ -264,7 +264,6 @@ mod tests {
             prefix: Some("8888".to_string()),
             suffix: None,
             leading_zeros: None,
-            leading_zeros_exact: None,
             threads: 1024,
             work_group_size: 256,
             poll_interval: 100,
