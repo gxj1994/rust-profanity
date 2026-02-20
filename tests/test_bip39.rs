@@ -284,8 +284,8 @@ fn test_opencl_sha256() {
         .dims(1)
         .build() {
         Ok(p) => p,
-        Err(_) => {
-            println!("OpenCL 不可用，跳过测试");
+        Err(e) => {
+            println!("OpenCL 不可用，跳过测试: {:?}", e);
             return;
         }
     };
@@ -612,10 +612,74 @@ __kernel void test_address_from_entropy(
     __global uchar* address_out
 ) {
     uchar address[20];
-    derive_address_from_entropy(entropy, address);
+    // 将常量地址空间的熵复制到本地地址空间
+    uchar local_entropy[32];
+    for (int i = 0; i < 32; i++) {
+        local_entropy[i] = entropy[i];
+    }
+    derive_address_from_entropy(local_entropy, address);
     
     for (int i = 0; i < 20; i++) {
         address_out[i] = address[i];
+    }
+}
+
+// 调试内核: 输出中间值
+__kernel void test_debug_derivation(
+    __constant uchar* entropy,
+    __global uchar* seed_out,      // 64 bytes
+    __global uchar* master_out,    // 64 bytes
+    __global uchar* privkey_out,   // 32 bytes
+    __global uchar* pubkey_out,    // 65 bytes
+    __global uchar* address_out    // 20 bytes
+) {
+    // 复制熵到本地
+    uchar local_entropy[32];
+    for (int i = 0; i < 32; i++) {
+        local_entropy[i] = entropy[i];
+    }
+    
+    // 1. 熵 -> 助记词
+    ushort words[24];
+    entropy_to_mnemonic(local_entropy, words);
+    
+    // 2. 助记词 -> 种子
+    local_mnemonic_t mn;
+    for (int i = 0; i < 24; i++) {
+        mn.words[i] = words[i];
+    }
+    seed_t seed;
+    mnemonic_to_seed(&mn, &seed);
+    for (int i = 0; i < 64; i++) {
+        seed_out[i] = seed.bytes[i];
+    }
+    
+    // 3. 种子 -> 主密钥
+    uchar master_key[64];
+    seed_to_master_key(&seed, master_key);
+    for (int i = 0; i < 64; i++) {
+        master_out[i] = master_key[i];
+    }
+    
+    // 4. 主密钥 -> 派生路径 -> 私钥
+    uchar private_key[32];
+    get_ethereum_private_key_local(&mn, private_key);
+    for (int i = 0; i < 32; i++) {
+        privkey_out[i] = private_key[i];
+    }
+    
+    // 5. 私钥 -> 公钥
+    uchar public_key[65];
+    private_to_public(private_key, public_key);
+    for (int i = 0; i < 65; i++) {
+        pubkey_out[i] = public_key[i];
+    }
+    
+    // 6. 公钥 -> 地址
+    uchar hash[32];
+    keccak256(public_key + 1, 64, hash);
+    for (int i = 0; i < 20; i++) {
+        address_out[i] = hash[i + 12];
     }
 }
 "#);
@@ -683,4 +747,997 @@ __kernel void test_address_from_entropy(
     );
     
     println!("✓ OpenCL与Rust地址生成一致!");
+}
+
+/// 调试OpenCL地址生成中间值
+#[test]
+fn test_opencl_debug_derivation() {
+    use ocl::{ProQue, Buffer, MemFlags};
+    use rust_profanity::mnemonic::Mnemonic;
+    
+    // 使用与Rust测试相同的助记词
+    let mnemonic_str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon art";
+    
+    let mnemonic = Mnemonic::from_string(mnemonic_str).expect("解析助记词失败");
+    let (entropy, valid) = mnemonic.to_entropy();
+    assert!(valid, "助记词校验和必须有效");
+    
+    println!("========================================");
+    println!("OpenCL 调试 - 地址生成中间值对比");
+    println!("========================================");
+    println!("测试熵: {}", hex::encode(&entropy));
+    
+    // 加载完整的内核源代码 (与主程序相同)
+    let mut source = String::new();
+    source.push_str(include_str!("../kernels/crypto/sha512.cl"));
+    source.push('\n');
+    source.push_str(include_str!("../kernels/crypto/pbkdf2.cl"));
+    source.push('\n');
+    source.push_str(include_str!("../kernels/crypto/sha256.cl"));
+    source.push('\n');
+    source.push_str(include_str!("../kernels/crypto/keccak.cl"));
+    source.push('\n');
+    source.push_str(include_str!("../kernels/crypto/secp256k1.cl"));
+    source.push('\n');
+    source.push_str(include_str!("../kernels/utils/condition.cl"));
+    source.push('\n');
+    source.push_str(include_str!("../kernels/bip39/wordlist.cl"));
+    source.push('\n');
+    source.push_str(include_str!("../kernels/bip39/entropy.cl"));
+    source.push('\n');
+    
+    // search.cl 的内容 (去掉 #include)
+    let search_kernel = include_str!("../kernels/search.cl");
+    for line in search_kernel.lines() {
+        if !line.trim_start().starts_with("#include") {
+            source.push_str(line);
+            source.push('\n');
+        }
+    }
+    source.push('\n');
+    
+    // mnemonic.cl
+    source.push_str(include_str!("../kernels/bip39/mnemonic.cl"));
+    source.push('\n');
+    
+    // 添加测试内核
+    source.push_str(r#"
+// 测试内核: 从熵生成地址
+__kernel void test_address_from_entropy(
+    __constant uchar* entropy,
+    __global uchar* address_out
+) {
+    uchar address[20];
+    // 将常量地址空间的熵复制到本地地址空间
+    uchar local_entropy[32];
+    for (int i = 0; i < 32; i++) {
+        local_entropy[i] = entropy[i];
+    }
+    derive_address_from_entropy(local_entropy, address);
+    
+    for (int i = 0; i < 20; i++) {
+        address_out[i] = address[i];
+    }
+}
+
+// 调试内核: 输出中间值
+__kernel void test_debug_derivation(
+    __constant uchar* entropy,
+    __global uchar* seed_out,      // 64 bytes
+    __global uchar* master_out,    // 64 bytes
+    __global uchar* privkey_out,   // 32 bytes
+    __global uchar* pubkey_out,    // 65 bytes
+    __global uchar* address_out    // 20 bytes
+) {
+    // 复制熵到本地
+    uchar local_entropy[32];
+    for (int i = 0; i < 32; i++) {
+        local_entropy[i] = entropy[i];
+    }
+    
+    // 1. 熵 -> 助记词
+    ushort words[24];
+    entropy_to_mnemonic(local_entropy, words);
+    
+    // 2. 助记词 -> 种子
+    local_mnemonic_t mn;
+    for (int i = 0; i < 24; i++) {
+        mn.words[i] = words[i];
+    }
+    seed_t seed;
+    mnemonic_to_seed(&mn, &seed);
+    for (int i = 0; i < 64; i++) {
+        seed_out[i] = seed.bytes[i];
+    }
+    
+    // 3. 种子 -> 主密钥
+    uchar master_key[64];
+    seed_to_master_key(&seed, master_key);
+    for (int i = 0; i < 64; i++) {
+        master_out[i] = master_key[i];
+    }
+    
+    // 4. 主密钥 -> 派生路径 -> 私钥
+    uchar private_key[32];
+    get_ethereum_private_key_local(&mn, private_key);
+    for (int i = 0; i < 32; i++) {
+        privkey_out[i] = private_key[i];
+    }
+    
+    // 5. 私钥 -> 公钥
+    uchar public_key[65];
+    private_to_public(private_key, public_key);
+    for (int i = 0; i < 65; i++) {
+        pubkey_out[i] = public_key[i];
+    }
+    
+    // 6. 公钥 -> 地址
+    uchar hash[32];
+    keccak256(public_key + 1, 64, hash);
+    for (int i = 0; i < 20; i++) {
+        address_out[i] = hash[i + 12];
+    }
+}
+"#);
+    
+    // 创建OpenCL上下文
+    let proque = match ProQue::builder()
+        .src(&source)
+        .dims(1)
+        .build() {
+        Ok(p) => p,
+        Err(e) => {
+            println!("OpenCL 不可用，跳过测试: {}", e);
+            return;
+        }
+    };
+    
+    // 输入缓冲区: 熵
+    let entropy_buffer = Buffer::<u8>::builder()
+        .queue(proque.queue().clone())
+        .flags(MemFlags::READ_ONLY)
+        .len(32)
+        .copy_host_slice(&entropy)
+        .build()
+        .expect("创建熵缓冲区失败");
+    
+    // 输出缓冲区
+    let seed_buffer = Buffer::<u8>::builder()
+        .queue(proque.queue().clone())
+        .flags(MemFlags::WRITE_ONLY)
+        .len(64)
+        .build()
+        .expect("创建种子缓冲区失败");
+    
+    let master_buffer = Buffer::<u8>::builder()
+        .queue(proque.queue().clone())
+        .flags(MemFlags::WRITE_ONLY)
+        .len(64)
+        .build()
+        .expect("创建主密钥缓冲区失败");
+    
+    let privkey_buffer = Buffer::<u8>::builder()
+        .queue(proque.queue().clone())
+        .flags(MemFlags::WRITE_ONLY)
+        .len(32)
+        .build()
+        .expect("创建私钥缓冲区失败");
+    
+    let pubkey_buffer = Buffer::<u8>::builder()
+        .queue(proque.queue().clone())
+        .flags(MemFlags::WRITE_ONLY)
+        .len(65)
+        .build()
+        .expect("创建公钥缓冲区失败");
+    
+    let address_buffer = Buffer::<u8>::builder()
+        .queue(proque.queue().clone())
+        .flags(MemFlags::WRITE_ONLY)
+        .len(20)
+        .build()
+        .expect("创建地址缓冲区失败");
+    
+    // 创建内核
+    let kernel = proque.kernel_builder("test_debug_derivation")
+        .arg(&entropy_buffer)
+        .arg(&seed_buffer)
+        .arg(&master_buffer)
+        .arg(&privkey_buffer)
+        .arg(&pubkey_buffer)
+        .arg(&address_buffer)
+        .build()
+        .expect("创建内核失败");
+    
+    // 执行内核
+    unsafe {
+        kernel.enq().expect("执行内核失败");
+    }
+    
+    // 读取结果
+    let mut cl_seed = vec![0u8; 64];
+    let mut cl_master = vec![0u8; 64];
+    let mut cl_privkey = vec![0u8; 32];
+    let mut cl_pubkey = vec![0u8; 65];
+    let mut cl_address = vec![0u8; 20];
+    
+    seed_buffer.read(&mut cl_seed).enq().expect("读取种子失败");
+    master_buffer.read(&mut cl_master).enq().expect("读取主密钥失败");
+    privkey_buffer.read(&mut cl_privkey).enq().expect("读取私钥失败");
+    pubkey_buffer.read(&mut cl_pubkey).enq().expect("读取公钥失败");
+    address_buffer.read(&mut cl_address).enq().expect("读取地址失败");
+    
+    // Rust 参考值 (来自 test_detailed_address_generation)
+    let rust_seed = hex::decode("408b285c123836004f4b8842c89324c1f01382450c0d439af345ba7fc49acf705489c6fc77dbd4e3dc1dd8cc6bc9f043db8ada1e243c4a0eafb290d399480840").unwrap();
+    let rust_master_priv = hex::decode("235b34cd7c9f6d7e4595ffe9ae4b1cb5606df8aca2b527d20a07c8f56b2342f4").unwrap();
+    let rust_master_chain = hex::decode("f40eaad21641ca7cb5ac00f9ce21cac9ba070bb673a237f7bce57acda54386a4").unwrap();
+    let rust_privkey = hex::decode("1053fae1b3ac64f178bcc21026fd06a3f4544ec2f35338b001f02d1d8efa3d5f").unwrap();
+    let rust_pubkey = hex::decode("04dc286c821c7490afbe20a79d13123b9f41f3d7ef21e4a9caacd22f5983b28eca0e4dbd5624505a2c968fec15f25990c7324736890f6d0f74241f98e4259c1d42").unwrap();
+    let rust_address = hex::decode("f278cf59f82edcf871d630f28ecc8056f25c1cdb").unwrap();
+    
+    println!("\n1. BIP39 种子对比:");
+    println!("   OpenCL: {}", hex::encode(&cl_seed));
+    println!("   Rust:   {}", hex::encode(&rust_seed));
+    println!("   匹配: {}", cl_seed == rust_seed);
+    
+    println!("\n2. BIP32 主密钥对比:");
+    println!("   OpenCL 主私钥: {}", hex::encode(&cl_master[..32]));
+    println!("   Rust   主私钥: {}", hex::encode(&rust_master_priv));
+    println!("   匹配: {}", &cl_master[..32] == rust_master_priv.as_slice());
+    println!("   OpenCL 主链码: {}", hex::encode(&cl_master[32..]));
+    println!("   Rust   主链码: {}", hex::encode(&rust_master_chain));
+    println!("   匹配: {}", &cl_master[32..] == rust_master_chain.as_slice());
+    
+    println!("\n3. 派生后私钥对比:");
+    println!("   OpenCL: {}", hex::encode(&cl_privkey));
+    println!("   Rust:   {}", hex::encode(&rust_privkey));
+    println!("   匹配: {}", cl_privkey == rust_privkey);
+    
+    println!("\n4. 公钥对比:");
+    println!("   OpenCL: {}", hex::encode(&cl_pubkey));
+    println!("   Rust:   {}", hex::encode(&rust_pubkey));
+    println!("   匹配: {}", cl_pubkey == rust_pubkey);
+    
+    println!("\n5. 地址对比:");
+    println!("   OpenCL: 0x{}", hex::encode(&cl_address));
+    println!("   Rust:   0x{}", hex::encode(&rust_address));
+    println!("   匹配: {}", cl_address == rust_address);
+    
+    println!("\n========================================");
+}
+
+/// 验证OpenCL助记词字符串生成
+#[test]
+fn test_opencl_mnemonic_string() {
+    use ocl::{ProQue, Buffer, MemFlags};
+    use rust_profanity::mnemonic::Mnemonic;
+    
+    let mnemonic_str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon art";
+    
+    let mnemonic = Mnemonic::from_string(mnemonic_str).expect("解析助记词失败");
+    let (entropy, valid) = mnemonic.to_entropy();
+    assert!(valid, "助记词校验和必须有效");
+    
+    println!("========================================");
+    println!("OpenCL 助记词字符串生成验证");
+    println!("========================================");
+    println!("原始助记词: {}", mnemonic_str);
+    println!("助记词长度: {} 字节", mnemonic_str.len());
+    
+    // 加载内核源代码
+    let mut source = String::new();
+    source.push_str(include_str!("../kernels/crypto/sha256.cl"));
+    source.push('\n');
+    source.push_str(include_str!("../kernels/bip39/wordlist.cl"));
+    source.push('\n');
+    source.push_str(include_str!("../kernels/bip39/entropy.cl"));
+    source.push('\n');
+    
+    // 添加助记词结构定义和测试内核
+    source.push_str(r#"
+typedef struct {
+    ushort words[24];
+} mnemonic_t;
+
+// 测试内核: 生成助记词字符串
+__kernel void test_mnemonic_string(
+    __constant uchar* entropy,
+    __global uchar* output,
+    __global uint* out_len
+) {
+    // 将常量地址空间的熵复制到本地地址空间
+    uchar local_entropy[32];
+    for (int i = 0; i < 32; i++) {
+        local_entropy[i] = entropy[i];
+    }
+    
+    // 熵 -> 助记词
+    ushort words[24];
+    entropy_to_mnemonic(local_entropy, words);
+    
+    // 构建 mnemonic_t
+    mnemonic_t mn;
+    for (int i = 0; i < 24; i++) {
+        mn.words[i] = words[i];
+    }
+    
+    // 生成字符串
+    uchar local_output[256];
+    for (int i = 0; i < 256; i++) {
+        local_output[i] = 0;
+    }
+    
+    uchar pos = 0;
+    for (int i = 0; i < 24; i++) {
+        if (i > 0) {
+            local_output[pos++] = ' ';
+        }
+        ushort word_idx = mn.words[i];
+        uchar word_len = copy_word(word_idx, local_output + pos, 255 - pos);
+        pos += word_len;
+    }
+    
+    // 输出结果
+    *out_len = pos;
+    for (int i = 0; i < 256; i++) {
+        output[i] = local_output[i];
+    }
+}
+"#);
+    
+    let proque = match ProQue::builder()
+        .src(&source)
+        .dims(1)
+        .build() {
+        Ok(p) => p,
+        Err(e) => {
+            println!("OpenCL 不可用，跳过测试: {}", e);
+            return;
+        }
+    };
+    
+    let entropy_buffer = Buffer::<u8>::builder()
+        .queue(proque.queue().clone())
+        .flags(MemFlags::READ_ONLY)
+        .len(32)
+        .copy_host_slice(&entropy)
+        .build()
+        .expect("创建熵缓冲区失败");
+    
+    let output_buffer = Buffer::<u8>::builder()
+        .queue(proque.queue().clone())
+        .flags(MemFlags::WRITE_ONLY)
+        .len(256)
+        .build()
+        .expect("创建输出缓冲区失败");
+    
+    let len_buffer = Buffer::<u32>::builder()
+        .queue(proque.queue().clone())
+        .flags(MemFlags::WRITE_ONLY)
+        .len(1)
+        .build()
+        .expect("创建长度缓冲区失败");
+    
+    let kernel = proque.kernel_builder("test_mnemonic_string")
+        .arg(&entropy_buffer)
+        .arg(&output_buffer)
+        .arg(&len_buffer)
+        .build()
+        .expect("创建内核失败");
+    
+    unsafe {
+        kernel.enq().expect("执行内核失败");
+    }
+    
+    let mut output = vec![0u8; 256];
+    let mut len = vec![0u32; 1];
+    output_buffer.read(&mut output).enq().expect("读取输出失败");
+    len_buffer.read(&mut len).enq().expect("读取长度失败");
+    
+    let cl_string = String::from_utf8_lossy(&output[..len[0] as usize]);
+    println!("OpenCL生成: {}", cl_string);
+    println!("OpenCL长度: {}", len[0]);
+    
+    // 验证单词索引
+    println!("\n单词索引对比:");
+    for i in 0..24 {
+        println!("  [{}]: OpenCL={}, Rust={} ({})", 
+            i, 
+            { /* 这里需要额外的内核来获取单词索引 */ 0 },
+            mnemonic.words[i],
+            if mnemonic.words[i] == 0 { "abandon" } else { "art" }
+        );
+    }
+    
+    println!("\n字符串匹配: {}", cl_string == mnemonic_str);
+}
+
+/// 验证OpenCL SHA256结果
+#[test]
+fn test_opencl_sha256_zero_entropy() {
+    use ocl::{ProQue, Buffer, MemFlags};
+    use sha2::{Sha256, Digest};
+    
+    // 全零熵
+    let entropy = [0u8; 32];
+    
+    // Rust SHA256
+    let rust_hash = Sha256::digest(&entropy);
+    println!("Rust SHA256:   {}", hex::encode(&rust_hash));
+    
+    // 加载内核源代码
+    let mut source = String::new();
+    source.push_str(include_str!("../kernels/crypto/sha256.cl"));
+    source.push('\n');
+    
+    // 添加测试内核
+    source.push_str(r#"
+__kernel void test_sha256(
+    __constant uchar* input,
+    __global uchar* output
+) {
+    uchar local_input[32];
+    uchar local_output[32];
+    for (int i = 0; i < 32; i++) {
+        local_input[i] = input[i];
+    }
+    sha256(local_input, 32, local_output);
+    for (int i = 0; i < 32; i++) {
+        output[i] = local_output[i];
+    }
+}
+"#);
+    
+    let proque = match ProQue::builder()
+        .src(&source)
+        .dims(1)
+        .build() {
+        Ok(p) => p,
+        Err(e) => {
+            println!("OpenCL 不可用，跳过测试: {:?}", e);
+            return;
+        }
+    };
+    
+    let input_buffer = Buffer::<u8>::builder()
+        .queue(proque.queue().clone())
+        .flags(MemFlags::READ_ONLY)
+        .len(32)
+        .copy_host_slice(&entropy)
+        .build()
+        .expect("创建输入缓冲区失败");
+    
+    let output_buffer = Buffer::<u8>::builder()
+        .queue(proque.queue().clone())
+        .flags(MemFlags::WRITE_ONLY)
+        .len(32)
+        .build()
+        .expect("创建输出缓冲区失败");
+    
+    let kernel = proque.kernel_builder("test_sha256")
+        .arg(&input_buffer)
+        .arg(&output_buffer)
+        .build()
+        .expect("创建内核失败");
+    
+    unsafe {
+        kernel.enq().expect("执行内核失败");
+    }
+    
+    let mut cl_hash = vec![0u8; 32];
+    output_buffer.read(&mut cl_hash).enq().expect("读取输出失败");
+    
+    println!("OpenCL SHA256: {}", hex::encode(&cl_hash));
+    println!("匹配: {}", cl_hash == rust_hash.as_slice());
+    
+    assert_eq!(cl_hash, rust_hash.as_slice(), "SHA256 结果不匹配!");
+}
+
+/// 验证OpenCL SHA256结果 - 使用已知测试向量
+#[test]
+fn test_opencl_sha256_abc() {
+    use ocl::{ProQue, Buffer, MemFlags};
+    use sha2::{Sha256, Digest};
+    
+    // 测试向量: "abc"
+    let data = b"abc";
+    
+    // Rust SHA256
+    let rust_hash = Sha256::digest(data);
+    println!("Rust SHA256 of 'abc':   {}", hex::encode(&rust_hash));
+    
+    // 加载内核源代码
+    let mut source = String::new();
+    source.push_str(include_str!("../kernels/crypto/sha256.cl"));
+    source.push('\n');
+    
+    // 添加测试内核
+    source.push_str(r#"
+__kernel void test_sha256_abc(
+    __constant uchar* input,
+    uint input_len,
+    __global uchar* output
+) {
+    uchar local_input[3];
+    for (int i = 0; i < 3; i++) {
+        local_input[i] = input[i];
+    }
+    uchar local_output[32];
+    sha256(local_input, input_len, local_output);
+    for (int i = 0; i < 32; i++) {
+        output[i] = local_output[i];
+    }
+}
+"#);
+    
+    let proque = match ProQue::builder()
+        .src(&source)
+        .dims(1)
+        .build() {
+        Ok(p) => p,
+        Err(e) => {
+            println!("OpenCL 不可用，跳过测试: {:?}", e);
+            return;
+        }
+    };
+    
+    let input_buffer = Buffer::<u8>::builder()
+        .queue(proque.queue().clone())
+        .flags(MemFlags::READ_ONLY)
+        .len(data.len())
+        .copy_host_slice(data)
+        .build()
+        .expect("创建输入缓冲区失败");
+    
+    let output_buffer = Buffer::<u8>::builder()
+        .queue(proque.queue().clone())
+        .flags(MemFlags::WRITE_ONLY)
+        .len(32)
+        .build()
+        .expect("创建输出缓冲区失败");
+    
+    let kernel = proque.kernel_builder("test_sha256_abc")
+        .arg(&input_buffer)
+        .arg(3u32)
+        .arg(&output_buffer)
+        .build()
+        .expect("创建内核失败");
+    
+    unsafe {
+        kernel.enq().expect("执行内核失败");
+    }
+    
+    let mut cl_hash = vec![0u8; 32];
+    output_buffer.read(&mut cl_hash).enq().expect("读取输出失败");
+    
+    println!("OpenCL SHA256 of 'abc': {}", hex::encode(&cl_hash));
+    println!("匹配: {}", cl_hash == rust_hash.as_slice());
+    
+    assert_eq!(cl_hash, rust_hash.as_slice(), "SHA256 结果不匹配!");
+}
+
+
+
+#[test]
+fn test_entropy_to_mnemonic_indices() {
+    use ocl::{ProQue, Buffer, MemFlags};
+    
+    // 全零熵应该生成的助记词索引
+    let mut kernel_src = String::new();
+    kernel_src.push_str(include_str!("../kernels/crypto/sha256.cl"));
+    kernel_src.push('\n');
+    kernel_src.push_str(include_str!("../kernels/bip39/entropy.cl"));
+    kernel_src.push('\n');
+    kernel_src.push_str(r#"
+__kernel void test_entropy_to_words(
+    __constant uchar* entropy,
+    __global ushort* words_out
+) {
+    uchar local_entropy[32];
+    for (int i = 0; i < 32; i++) {
+        local_entropy[i] = entropy[i];
+    }
+    
+    ushort words[24];
+    entropy_to_mnemonic(local_entropy, words);
+    
+    for (int i = 0; i < 24; i++) {
+        words_out[i] = words[i];
+    }
+}
+"#);
+    
+    let entropy = [0u8; 32];
+    
+    // 期望的单词索引（基于全零熵）
+    // 全零熵的 SHA256: 66687aadf862bd776c8fc18b8e9f8e20089714856ee233b3902a591d0d5f2925
+    // 校验和: 0x66 的前8位 = 0x66
+    // 熵+校验和 = 256位全0 + 8位 01100110
+    
+    let proque = ProQue::builder()
+        .src(kernel_src)
+        .dims(1)
+        .build()
+        .expect("创建ProQue失败");
+    
+    let entropy_buffer = Buffer::<u8>::builder()
+        .queue(proque.queue().clone())
+        .flags(MemFlags::READ_ONLY)
+        .len(32)
+        .copy_host_slice(&entropy)
+        .build()
+        .expect("创建熵缓冲区失败");
+    
+    let words_buffer = Buffer::<u16>::builder()
+        .queue(proque.queue().clone())
+        .flags(MemFlags::WRITE_ONLY)
+        .len(24)
+        .build()
+        .expect("创建单词缓冲区失败");
+    
+    let kernel = proque.kernel_builder("test_entropy_to_words")
+        .arg(&entropy_buffer)
+        .arg(&words_buffer)
+        .build()
+        .expect("创建内核失败");
+    
+    unsafe {
+        kernel.enq().expect("执行内核失败");
+    }
+    
+    let mut cl_words = vec![0u16; 24];
+    words_buffer.read(&mut cl_words).enq().expect("读取单词失败");
+    
+    // Rust 计算
+    let wordlist = bip39::Language::English.word_list();
+    let mnemonic = bip39::Mnemonic::from_entropy_in(bip39::Language::English, &entropy).unwrap();
+    let mnemonic_str = mnemonic.to_string();
+    let rust_words: Vec<u16> = mnemonic_str.split_whitespace()
+        .map(|w| wordlist.iter().position(|&x| x == w).unwrap() as u16)
+        .collect();
+    
+    println!("全零熵的助记词索引对比:");
+    println!("OpenCL: {:?}", cl_words);
+    println!("Rust:   {:?}", rust_words);
+    
+    for i in 0..24 {
+        let cl_word = wordlist[cl_words[i] as usize];
+        let rust_word = wordlist[rust_words[i] as usize];
+        if cl_words[i] != rust_words[i] {
+            println!("  [{}]: OpenCL={} ({}), Rust={} ({})", 
+                i, cl_words[i], cl_word, rust_words[i], rust_word);
+        }
+    }
+    
+    assert_eq!(cl_words, rust_words, "助记词索引不匹配!");
+}
+
+#[test]
+fn test_opencl_mnemonic_to_seed() {
+    use ocl::{ProQue, Buffer, MemFlags};
+    
+    // 测试助记词字符串到种子的转换
+    let mnemonic_str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon art";
+    
+    let mut kernel_src = String::new();
+    kernel_src.push_str(include_str!("../kernels/crypto/sha512.cl"));
+    kernel_src.push('\n');
+    kernel_src.push_str(include_str!("../kernels/crypto/pbkdf2.cl"));
+    kernel_src.push('\n');
+    kernel_src.push_str(include_str!("../kernels/bip39/wordlist.cl"));
+    kernel_src.push('\n');
+    kernel_src.push_str(r#"
+typedef struct {
+    ushort words[24];
+} mnemonic_t;
+
+// 简化的助记词到字符串转换
+uchar mnemonic_to_string_test(const mnemonic_t* mnemonic, uchar* output) {
+    uchar pos = 0;
+    for (int i = 0; i < 24; i++) {
+        if (i > 0) {
+            output[pos++] = ' ';
+        }
+        ushort word_idx = mnemonic->words[i];
+        uchar word_len = copy_word(word_idx, output + pos, 255 - pos);
+        pos += word_len;
+    }
+    return pos;
+}
+
+__kernel void test_mnemonic_to_seed(
+    __constant ushort* word_indices,
+    __global uchar* seed_out
+) {
+    // 构建助记词结构
+    mnemonic_t mn;
+    for (int i = 0; i < 24; i++) {
+        mn.words[i] = word_indices[i];
+    }
+    
+    // 转换为字符串
+    uchar password[256];
+    for (int i = 0; i < 256; i++) password[i] = 0;
+    uchar password_len = mnemonic_to_string_test(&mn, password);
+    
+    // 输出密码长度供调试
+    // seed_out[0] = password_len;
+    
+    // salt = "mnemonic"
+    uchar salt[8] = {'m', 'n', 'e', 'm', 'o', 'n', 'i', 'c'};
+    
+    // PBKDF2 - 使用局部缓冲区然后复制到输出
+    uchar local_seed[64];
+    pbkdf2_hmac_sha512(password, password_len, salt, 8, 2048, local_seed, 64);
+    for (int i = 0; i < 64; i++) {
+        seed_out[i] = local_seed[i];
+    }
+}
+"#);
+    
+    // 获取单词索引
+    let wordlist = bip39::Language::English.word_list();
+    let words: Vec<&str> = mnemonic_str.split_whitespace().collect();
+    let indices: Vec<u16> = words.iter()
+        .map(|w| wordlist.iter().position(|&x| x == *w).unwrap() as u16)
+        .collect();
+    
+    println!("测试助记词: {}", mnemonic_str);
+    println!("单词索引: {:?}", indices);
+    
+    let proque = ProQue::builder()
+        .src(&kernel_src)
+        .dims(1)
+        .build()
+        .expect("创建ProQue失败");
+    
+    let indices_buffer = Buffer::<u16>::builder()
+        .queue(proque.queue().clone())
+        .flags(MemFlags::READ_ONLY)
+        .len(24)
+        .copy_host_slice(&indices)
+        .build()
+        .expect("创建索引缓冲区失败");
+    
+    let seed_buffer = Buffer::<u8>::builder()
+        .queue(proque.queue().clone())
+        .flags(MemFlags::WRITE_ONLY)
+        .len(64)
+        .build()
+        .expect("创建种子缓冲区失败");
+    
+    let kernel = proque.kernel_builder("test_mnemonic_to_seed")
+        .arg(&indices_buffer)
+        .arg(&seed_buffer)
+        .build()
+        .expect("创建内核失败");
+    
+    unsafe {
+        kernel.enq().expect("执行内核失败");
+    }
+    
+    let mut cl_seed = vec![0u8; 64];
+    seed_buffer.read(&mut cl_seed).enq().expect("读取种子失败");
+    
+    // Rust 计算
+    let mnemonic = bip39::Mnemonic::parse_in(bip39::Language::English, mnemonic_str).unwrap();
+    let rust_seed = mnemonic.to_seed("");
+    
+    println!("OpenCL 种子: {}", hex::encode(&cl_seed));
+    println!("Rust 种子:   {}", hex::encode(&rust_seed));
+    println!("匹配: {}", cl_seed == rust_seed.as_slice());
+    
+    assert_eq!(cl_seed, rust_seed.as_slice(), "种子不匹配!");
+}
+
+#[test]
+fn test_opencl_hmac_sha512_basic() {
+    use ocl::{ProQue, Buffer, MemFlags};
+    use sha2::Sha512;
+    use hmac::{Hmac, Mac};
+    
+    let mut kernel_src = String::new();
+    kernel_src.push_str(include_str!("../kernels/crypto/sha512.cl"));
+    kernel_src.push('\n');
+    kernel_src.push_str(r#"
+__kernel void test_hmac_sha512(
+    __constant uchar* key,
+    uint key_len,
+    __constant uchar* data,
+    uint data_len,
+    __global uchar* output
+) {
+    uchar local_key[128];
+    uchar local_data[64];
+    for (int i = 0; i < key_len; i++) local_key[i] = key[i];
+    for (int i = 0; i < data_len; i++) local_data[i] = data[i];
+    
+    uchar local_output[64];
+    hmac_sha512(local_key, key_len, local_data, data_len, local_output);
+    
+    for (int i = 0; i < 64; i++) {
+        output[i] = local_output[i];
+    }
+}
+"#);
+    
+    // 测试数据
+    let key = b"key";
+    let data = b"The quick brown fox jumps over the lazy dog";
+    
+    // Rust HMAC-SHA512
+    type HmacSha512 = Hmac<Sha512>;
+    let mut mac = HmacSha512::new_from_slice(key).unwrap();
+    mac.update(data);
+    let rust_result = mac.finalize().into_bytes();
+    
+    let proque = ProQue::builder()
+        .src(&kernel_src)
+        .dims(1)
+        .build()
+        .expect("创建ProQue失败");
+    
+    let key_buffer = Buffer::<u8>::builder()
+        .queue(proque.queue().clone())
+        .flags(MemFlags::READ_ONLY)
+        .len(key.len())
+        .copy_host_slice(key)
+        .build()
+        .expect("创建key缓冲区失败");
+    
+    let data_buffer = Buffer::<u8>::builder()
+        .queue(proque.queue().clone())
+        .flags(MemFlags::READ_ONLY)
+        .len(data.len())
+        .copy_host_slice(data)
+        .build()
+        .expect("创建data缓冲区失败");
+    
+    let output_buffer = Buffer::<u8>::builder()
+        .queue(proque.queue().clone())
+        .flags(MemFlags::WRITE_ONLY)
+        .len(64)
+        .build()
+        .expect("创建输出缓冲区失败");
+    
+    let kernel = proque.kernel_builder("test_hmac_sha512")
+        .arg(&key_buffer)
+        .arg(key.len() as u32)
+        .arg(&data_buffer)
+        .arg(data.len() as u32)
+        .arg(&output_buffer)
+        .build()
+        .expect("创建内核失败");
+    
+    unsafe {
+        kernel.enq().expect("执行内核失败");
+    }
+    
+    let mut cl_result = vec![0u8; 64];
+    output_buffer.read(&mut cl_result).enq().expect("读取输出失败");
+    
+    println!("测试 HMAC-SHA512:");
+    println!("Key: {:?}", std::str::from_utf8(key).unwrap());
+    println!("Data: {:?}", std::str::from_utf8(data).unwrap());
+    println!("OpenCL: {}", hex::encode(&cl_result));
+    println!("Rust:   {}", hex::encode(&rust_result));
+    println!("匹配: {}", cl_result == rust_result.as_slice());
+    
+    assert_eq!(cl_result, rust_result.as_slice(), "HMAC-SHA512 不匹配!");
+}
+
+#[test]
+fn test_opencl_sha512_basic() {
+    use ocl::{ProQue, Buffer, MemFlags};
+    use sha2::{Sha512, Digest};
+    
+    let mut kernel_src = String::new();
+    kernel_src.push_str(include_str!("../kernels/crypto/sha512.cl"));
+    kernel_src.push('\n');
+    kernel_src.push_str(r#"
+__kernel void test_sha512(
+    __constant uchar* data,
+    uint data_len,
+    __global uchar* output
+) {
+    uchar local_data[64];
+    for (int i = 0; i < data_len; i++) local_data[i] = data[i];
+    
+    uchar local_output[64];
+    sha512(local_data, data_len, local_output);
+    
+    for (int i = 0; i < 64; i++) {
+        output[i] = local_output[i];
+    }
+}
+"#);
+    
+    // 测试数据 - "abc"
+    let data = b"abc";
+    
+    // Rust SHA-512
+    let mut hasher = Sha512::new();
+    hasher.update(data);
+    let rust_result = hasher.finalize();
+    
+    let proque = ProQue::builder()
+        .src(&kernel_src)
+        .dims(1)
+        .build()
+        .expect("创建ProQue失败");
+    
+    let data_buffer = Buffer::<u8>::builder()
+        .queue(proque.queue().clone())
+        .flags(MemFlags::READ_ONLY)
+        .len(data.len())
+        .copy_host_slice(data)
+        .build()
+        .expect("创建data缓冲区失败");
+    
+    let output_buffer = Buffer::<u8>::builder()
+        .queue(proque.queue().clone())
+        .flags(MemFlags::WRITE_ONLY)
+        .len(64)
+        .build()
+        .expect("创建输出缓冲区失败");
+    
+    let kernel = proque.kernel_builder("test_sha512")
+        .arg(&data_buffer)
+        .arg(data.len() as u32)
+        .arg(&output_buffer)
+        .build()
+        .expect("创建内核失败");
+    
+    unsafe {
+        kernel.enq().expect("执行内核失败");
+    }
+    
+    let mut cl_result = vec![0u8; 64];
+    output_buffer.read(&mut cl_result).enq().expect("读取输出失败");
+    
+    println!("测试 SHA-512(\"abc\"):");
+    println!("OpenCL: {}", hex::encode(&cl_result));
+    println!("Rust:   {}", hex::encode(&rust_result));
+    println!("匹配: {}", cl_result == rust_result.as_slice());
+    
+    assert_eq!(cl_result, rust_result.as_slice(), "SHA-512 不匹配!");
+}
+
+
+
+#[test]
+fn test_bip32_first_derivation() {
+    // 验证第一步派生 m -> m/44'
+    use bip32::XPrv;
+    
+    let seed_hex = "408b285c123836004f4b8842c89324c1f01382450c0d439af345ba7fc49acf705489c6fc77dbd4e3dc1dd8cc6bc9f043db8ada1e243c4a0eafb290d399480840";
+    let seed = hex::decode(seed_hex).unwrap();
+    let seed_array: [u8; 64] = seed.try_into().unwrap();
+    
+    let xprv = XPrv::new(&seed_array).unwrap();
+    println!("主私钥: {}", hex::encode(xprv.private_key().to_bytes()));
+    
+    // 第一步派生: m/44'
+    let child_44 = xprv.derive_child(bip32::ChildNumber::new(44, true).unwrap()).unwrap();
+    println!("m/44' 私钥: {}", hex::encode(child_44.private_key().to_bytes()));
+    
+    // 第二步派生: m/44'/60'
+    let child_60 = child_44.derive_child(bip32::ChildNumber::new(60, true).unwrap()).unwrap();
+    println!("m/44'/60' 私钥: {}", hex::encode(child_60.private_key().to_bytes()));
+    
+    // 第三步派生: m/44'/60'/0'
+    let child_0h = child_60.derive_child(bip32::ChildNumber::new(0, true).unwrap()).unwrap();
+    println!("m/44'/60'/0' 私钥: {}", hex::encode(child_0h.private_key().to_bytes()));
+    
+    // 第四步派生: m/44'/60'/0'/0
+    let child_0 = child_0h.derive_child(bip32::ChildNumber::new(0, false).unwrap()).unwrap();
+    println!("m/44'/60'/0'/0 私钥: {}", hex::encode(child_0.private_key().to_bytes()));
+    
+    // 第五步派生: m/44'/60'/0'/0/0
+    let child_final = child_0.derive_child(bip32::ChildNumber::new(0, false).unwrap()).unwrap();
+    println!("m/44'/60'/0'/0/0 私钥: {}", hex::encode(child_final.private_key().to_bytes()));
+    
+    // 期望的最终私钥
+    let expected_privkey = "1053fae1b3ac64f178bcc21026fd06a3f4544ec2f35338b001f02d1d8efa3d5f";
+    println!("期望的最终私钥: {}", expected_privkey);
+    println!("匹配: {}", hex::encode(child_final.private_key().to_bytes()) == expected_privkey);
 }

@@ -56,6 +56,10 @@ uchar mnemonic_to_string(const mnemonic_t* mnemonic, uchar* output, uchar max_le
 void mnemonic_to_seed(const mnemonic_t* mnemonic, seed_t* seed) {
     // 构建助记词字符串 (最大约 24 * 8 + 23 = 215 字节)
     uchar password[256];
+    // 初始化数组以避免未定义行为
+    for (int i = 0; i < 256; i++) {
+        password[i] = 0;
+    }
     uchar password_len = mnemonic_to_string(mnemonic, password, 255);
     
     // salt = "mnemonic"

@@ -170,20 +170,26 @@ void sha512(const uchar* data, uint len, uchar hash[64]) {
     }
     block[remaining] = 0x80;
     
+    // 计算消息长度（位）- SHA-512使用128位长度字段
+    ulong bit_len = (ulong)len * 8;
+    
     if (remaining < 112) {
         // 单块填充
         for (uint j = remaining + 1; j < 112; j++) {
             block[j] = 0;
         }
-        ulong bit_len = (ulong)len * 8;
-        block[112] = (uchar)(bit_len >> 56);
-        block[113] = (uchar)(bit_len >> 48);
-        block[114] = (uchar)(bit_len >> 40);
-        block[115] = (uchar)(bit_len >> 32);
-        block[116] = (uchar)(bit_len >> 24);
-        block[117] = (uchar)(bit_len >> 16);
-        block[118] = (uchar)(bit_len >> 8);
-        block[119] = (uchar)bit_len;
+        // 写入128位长度（大端序）- 高64位为0，低64位为bit_len
+        for (uint j = 112; j < 120; j++) {
+            block[j] = 0;
+        }
+        block[120] = (uchar)(bit_len >> 56);
+        block[121] = (uchar)(bit_len >> 48);
+        block[122] = (uchar)(bit_len >> 40);
+        block[123] = (uchar)(bit_len >> 32);
+        block[124] = (uchar)(bit_len >> 24);
+        block[125] = (uchar)(bit_len >> 16);
+        block[126] = (uchar)(bit_len >> 8);
+        block[127] = (uchar)bit_len;
         sha512_compress(state, block);
     } else {
         // 双块填充
@@ -195,15 +201,18 @@ void sha512(const uchar* data, uint len, uchar hash[64]) {
         for (uint j = 0; j < 112; j++) {
             block[j] = 0;
         }
-        ulong bit_len = (ulong)len * 8;
-        block[112] = (uchar)(bit_len >> 56);
-        block[113] = (uchar)(bit_len >> 48);
-        block[114] = (uchar)(bit_len >> 40);
-        block[115] = (uchar)(bit_len >> 32);
-        block[116] = (uchar)(bit_len >> 24);
-        block[117] = (uchar)(bit_len >> 16);
-        block[118] = (uchar)(bit_len >> 8);
-        block[119] = (uchar)bit_len;
+        // 写入128位长度（大端序）- 高64位为0，低64位为bit_len
+        for (uint j = 112; j < 120; j++) {
+            block[j] = 0;
+        }
+        block[120] = (uchar)(bit_len >> 56);
+        block[121] = (uchar)(bit_len >> 48);
+        block[122] = (uchar)(bit_len >> 40);
+        block[123] = (uchar)(bit_len >> 32);
+        block[124] = (uchar)(bit_len >> 24);
+        block[125] = (uchar)(bit_len >> 16);
+        block[126] = (uchar)(bit_len >> 8);
+        block[127] = (uchar)bit_len;
         sha512_compress(state, block);
     }
     
@@ -225,6 +234,13 @@ void hmac_sha512(const uchar* key, uint key_len, const uchar* data, uint data_le
     uchar ipad[128];
     uchar opad[128];
     uchar key_buf[128];
+    
+    // 初始化数组
+    for (uint i = 0; i < 128; i++) {
+        ipad[i] = 0;
+        opad[i] = 0;
+        key_buf[i] = 0;
+    }
     
     // 如果密钥太长，先哈希
     if (key_len > 128) {
@@ -271,19 +287,25 @@ void hmac_sha512(const uchar* key, uint key_len, const uchar* data, uint data_le
     }
     block[remaining] = 0x80;
     
+    // 计算内层哈希总长度: ipad(128字节) + data(data_len字节)
+    ulong inner_bit_len = (128ULL + (ulong)data_len) * 8ULL;
+    
     if (remaining < 112) {
         for (uint j = remaining + 1; j < 112; j++) {
             block[j] = 0;
         }
-        ulong bit_len = (128ULL + data_len) * 8;
-        block[112] = (uchar)(bit_len >> 56);
-        block[113] = (uchar)(bit_len >> 48);
-        block[114] = (uchar)(bit_len >> 40);
-        block[115] = (uchar)(bit_len >> 32);
-        block[116] = (uchar)(bit_len >> 24);
-        block[117] = (uchar)(bit_len >> 16);
-        block[118] = (uchar)(bit_len >> 8);
-        block[119] = (uchar)bit_len;
+        // 写入128位长度（大端序）- 高64位为0，低64位为bit_len
+        for (uint j = 112; j < 120; j++) {
+            block[j] = 0;
+        }
+        block[120] = (uchar)(inner_bit_len >> 56);
+        block[121] = (uchar)(inner_bit_len >> 48);
+        block[122] = (uchar)(inner_bit_len >> 40);
+        block[123] = (uchar)(inner_bit_len >> 32);
+        block[124] = (uchar)(inner_bit_len >> 24);
+        block[125] = (uchar)(inner_bit_len >> 16);
+        block[126] = (uchar)(inner_bit_len >> 8);
+        block[127] = (uchar)inner_bit_len;
         sha512_compress(state, block);
     } else {
         for (uint j = remaining + 1; j < 128; j++) {
@@ -294,15 +316,18 @@ void hmac_sha512(const uchar* key, uint key_len, const uchar* data, uint data_le
         for (uint j = 0; j < 112; j++) {
             block[j] = 0;
         }
-        ulong bit_len = (128ULL + data_len) * 8;
-        block[112] = (uchar)(bit_len >> 56);
-        block[113] = (uchar)(bit_len >> 48);
-        block[114] = (uchar)(bit_len >> 40);
-        block[115] = (uchar)(bit_len >> 32);
-        block[116] = (uchar)(bit_len >> 24);
-        block[117] = (uchar)(bit_len >> 16);
-        block[118] = (uchar)(bit_len >> 8);
-        block[119] = (uchar)bit_len;
+        // 写入128位长度（大端序）- 高64位为0，低64位为bit_len
+        for (uint j = 112; j < 120; j++) {
+            block[j] = 0;
+        }
+        block[120] = (uchar)(inner_bit_len >> 56);
+        block[121] = (uchar)(inner_bit_len >> 48);
+        block[122] = (uchar)(inner_bit_len >> 40);
+        block[123] = (uchar)(inner_bit_len >> 32);
+        block[124] = (uchar)(inner_bit_len >> 24);
+        block[125] = (uchar)(inner_bit_len >> 16);
+        block[126] = (uchar)(inner_bit_len >> 8);
+        block[127] = (uchar)inner_bit_len;
         sha512_compress(state, block);
     }
     
@@ -327,6 +352,9 @@ void hmac_sha512(const uchar* key, uint key_len, const uchar* data, uint data_le
     sha512_compress(state, opad);
     
     // 处理 inner_hash (64字节，需要填充)
+    // 外层哈希总长度: opad(128字节) + inner_hash(64字节) = 192字节
+    ulong outer_bit_len = (128ULL + 64ULL) * 8ULL;
+    
     for (uint j = 0; j < 64; j++) {
         block[j] = inner_hash[j];
     }
@@ -334,15 +362,18 @@ void hmac_sha512(const uchar* key, uint key_len, const uchar* data, uint data_le
     for (uint j = 65; j < 112; j++) {
         block[j] = 0;
     }
-    ulong bit_len = (128ULL + 64) * 8;
-    block[112] = (uchar)(bit_len >> 56);
-    block[113] = (uchar)(bit_len >> 48);
-    block[114] = (uchar)(bit_len >> 40);
-    block[115] = (uchar)(bit_len >> 32);
-    block[116] = (uchar)(bit_len >> 24);
-    block[117] = (uchar)(bit_len >> 16);
-    block[118] = (uchar)(bit_len >> 8);
-    block[119] = (uchar)bit_len;
+    // 写入128位长度（大端序）- 高64位为0，低64位为bit_len
+    for (uint j = 112; j < 120; j++) {
+        block[j] = 0;
+    }
+    block[120] = (uchar)(outer_bit_len >> 56);
+    block[121] = (uchar)(outer_bit_len >> 48);
+    block[122] = (uchar)(outer_bit_len >> 40);
+    block[123] = (uchar)(outer_bit_len >> 32);
+    block[124] = (uchar)(outer_bit_len >> 24);
+    block[125] = (uchar)(outer_bit_len >> 16);
+    block[126] = (uchar)(outer_bit_len >> 8);
+    block[127] = (uchar)outer_bit_len;
     sha512_compress(state, block);
     
     // 输出结果

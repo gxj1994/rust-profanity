@@ -16,6 +16,10 @@ void pbkdf2_hmac_sha512_block(
 ) {
     // U_1 = HMAC-SHA512(Password, Salt || INT_32_BE(block_num))
     uchar salt_block[256];  // 假设 salt_len + 4 < 256
+    // 初始化数组
+    for (uint i = 0; i < 256; i++) {
+        salt_block[i] = 0;
+    }
     for (uint i = 0; i < salt_len; i++) {
         salt_block[i] = salt[i];
     }

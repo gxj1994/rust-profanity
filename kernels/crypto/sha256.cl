@@ -133,26 +133,33 @@ void sha256(const uchar* data, uint len, uchar hash[32]) {
     
     // 填充
     uchar block[64];
+    // 初始化块
+    for (uint j = 0; j < 64; j++) {
+        block[j] = 0;
+    }
     uint remaining = len - i;
     for (uint j = 0; j < remaining; j++) {
         block[j] = data[i + j];
     }
     block[remaining] = 0x80;
     
+    // 计算消息长度（位）- 使用64位计算避免溢出
+    ulong bit_len_64 = (ulong)len * 8ULL;
+    
     if (remaining < 56) {
         // 单块填充
         for (uint j = remaining + 1; j < 56; j++) {
             block[j] = 0;
         }
-        uint bit_len = len * 8;
-        block[56] = (uchar)(bit_len >> 56);
-        block[57] = (uchar)(bit_len >> 48);
-        block[58] = (uchar)(bit_len >> 40);
-        block[59] = (uchar)(bit_len >> 32);
-        block[60] = (uchar)(bit_len >> 24);
-        block[61] = (uchar)(bit_len >> 16);
-        block[62] = (uchar)(bit_len >> 8);
-        block[63] = (uchar)bit_len;
+        // 写入64位长度（大端序）
+        block[56] = (uchar)(bit_len_64 >> 56);
+        block[57] = (uchar)(bit_len_64 >> 48);
+        block[58] = (uchar)(bit_len_64 >> 40);
+        block[59] = (uchar)(bit_len_64 >> 32);
+        block[60] = (uchar)(bit_len_64 >> 24);
+        block[61] = (uchar)(bit_len_64 >> 16);
+        block[62] = (uchar)(bit_len_64 >> 8);
+        block[63] = (uchar)bit_len_64;
         sha256_compress(state, block);
     } else {
         // 双块填充
@@ -164,15 +171,15 @@ void sha256(const uchar* data, uint len, uchar hash[32]) {
         for (uint j = 0; j < 56; j++) {
             block[j] = 0;
         }
-        uint bit_len = len * 8;
-        block[56] = (uchar)(bit_len >> 56);
-        block[57] = (uchar)(bit_len >> 48);
-        block[58] = (uchar)(bit_len >> 40);
-        block[59] = (uchar)(bit_len >> 32);
-        block[60] = (uchar)(bit_len >> 24);
-        block[61] = (uchar)(bit_len >> 16);
-        block[62] = (uchar)(bit_len >> 8);
-        block[63] = (uchar)bit_len;
+        // 写入64位长度（大端序）
+        block[56] = (uchar)(bit_len_64 >> 56);
+        block[57] = (uchar)(bit_len_64 >> 48);
+        block[58] = (uchar)(bit_len_64 >> 40);
+        block[59] = (uchar)(bit_len_64 >> 32);
+        block[60] = (uchar)(bit_len_64 >> 24);
+        block[61] = (uchar)(bit_len_64 >> 16);
+        block[62] = (uchar)(bit_len_64 >> 8);
+        block[63] = (uchar)bit_len_64;
         sha256_compress(state, block);
     }
     
@@ -237,15 +244,22 @@ void hmac_sha256(const uchar* key, uint key_len, const uchar* data, uint data_le
     }
     block[remaining] = 0x80;
     
+    // 计算内层哈希总长度: ipad(64字节) + data(data_len字节)
+    ulong inner_bit_len = (64ULL + (ulong)data_len) * 8ULL;
+    
     if (remaining < 56) {
         for (uint j = remaining + 1; j < 56; j++) {
             block[j] = 0;
         }
-        uint bit_len = (64 + data_len) * 8;
-        block[56] = (uchar)(bit_len >> 24);
-        block[57] = (uchar)(bit_len >> 16);
-        block[58] = (uchar)(bit_len >> 8);
-        block[59] = (uchar)bit_len;
+        // 写入64位长度（大端序）
+        block[56] = (uchar)(inner_bit_len >> 56);
+        block[57] = (uchar)(inner_bit_len >> 48);
+        block[58] = (uchar)(inner_bit_len >> 40);
+        block[59] = (uchar)(inner_bit_len >> 32);
+        block[60] = (uchar)(inner_bit_len >> 24);
+        block[61] = (uchar)(inner_bit_len >> 16);
+        block[62] = (uchar)(inner_bit_len >> 8);
+        block[63] = (uchar)inner_bit_len;
         sha256_compress(state, block);
     } else {
         for (uint j = remaining + 1; j < 64; j++) {
@@ -256,11 +270,15 @@ void hmac_sha256(const uchar* key, uint key_len, const uchar* data, uint data_le
         for (uint j = 0; j < 56; j++) {
             block[j] = 0;
         }
-        uint bit_len = (64 + data_len) * 8;
-        block[56] = (uchar)(bit_len >> 24);
-        block[57] = (uchar)(bit_len >> 16);
-        block[58] = (uchar)(bit_len >> 8);
-        block[59] = (uchar)bit_len;
+        // 写入64位长度（大端序）
+        block[56] = (uchar)(inner_bit_len >> 56);
+        block[57] = (uchar)(inner_bit_len >> 48);
+        block[58] = (uchar)(inner_bit_len >> 40);
+        block[59] = (uchar)(inner_bit_len >> 32);
+        block[60] = (uchar)(inner_bit_len >> 24);
+        block[61] = (uchar)(inner_bit_len >> 16);
+        block[62] = (uchar)(inner_bit_len >> 8);
+        block[63] = (uchar)inner_bit_len;
         sha256_compress(state, block);
     }
     
@@ -281,6 +299,9 @@ void hmac_sha256(const uchar* key, uint key_len, const uchar* data, uint data_le
     sha256_compress(state, opad);
     
     // 处理 inner_hash (32字节，需要填充)
+    // 外层哈希总长度: opad(64字节) + inner_hash(32字节) = 96字节
+    ulong outer_bit_len = (64ULL + 32ULL) * 8ULL;
+    
     for (uint j = 0; j < 32; j++) {
         block[j] = inner_hash[j];
     }
@@ -288,11 +309,15 @@ void hmac_sha256(const uchar* key, uint key_len, const uchar* data, uint data_le
     for (uint j = 33; j < 56; j++) {
         block[j] = 0;
     }
-    uint bit_len = (64 + 32) * 8;
-    block[56] = (uchar)(bit_len >> 24);
-    block[57] = (uchar)(bit_len >> 16);
-    block[58] = (uchar)(bit_len >> 8);
-    block[59] = (uchar)bit_len;
+    // 写入64位长度（大端序）
+    block[56] = (uchar)(outer_bit_len >> 56);
+    block[57] = (uchar)(outer_bit_len >> 48);
+    block[58] = (uchar)(outer_bit_len >> 40);
+    block[59] = (uchar)(outer_bit_len >> 32);
+    block[60] = (uchar)(outer_bit_len >> 24);
+    block[61] = (uchar)(outer_bit_len >> 16);
+    block[62] = (uchar)(outer_bit_len >> 8);
+    block[63] = (uchar)outer_bit_len;
     sha256_compress(state, block);
     
     // 输出结果
