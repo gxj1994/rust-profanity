@@ -107,9 +107,11 @@ __kernel void search_kernel(
             if (old_val == 0) {
                 result->found = 1;
                 // 保存熵 (使用 uchar16 向量类型优化)
+                // 注意：必须保存当前的 local_entropy，而不是原始的 base_entropy
                 uchar16* result_entropy16 = (uchar16*)result->result_entropy;
-                result_entropy16[0] = dst16[0];
-                result_entropy16[1] = dst16[1];
+                uchar16* src_entropy16 = (uchar16*)local_entropy;
+                result_entropy16[0] = src_entropy16[0];
+                result_entropy16[1] = src_entropy16[1];
                 
                 // 保存地址 (使用 ulong + uint 批量复制)
                 *((ulong*)result->eth_address) = *((ulong*)address);

@@ -203,7 +203,8 @@ fn main() -> anyhow::Result<()> {
         poll_count += 1;
         if poll_count % 10 == 0 {
             let elapsed = start_time.elapsed().as_secs_f64();
-            let result = search_kernel.read_result().ok();
+            // 使用非阻塞方式读取结果，避免阻塞主线程
+            let result = search_kernel.read_result_nonblock().ok();
             if let Some(r) = result {
                 let checked = r.total_checked;
                 let speed = if elapsed > 0.0 { checked as f64 / elapsed } else { 0.0 };
@@ -212,7 +213,7 @@ fn main() -> anyhow::Result<()> {
                     elapsed, checked, speed
                 );
             } else {
-                info!("搜索中... 已运行 {:.1} 秒", elapsed);
+                info!("搜索中... 已运行 {:.1} 秒 (GPU计算中)", elapsed);
             }
         }
         

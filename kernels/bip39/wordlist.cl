@@ -761,7 +761,11 @@ uchar copy_word(ushort idx, uchar* dest, uchar max_len) {
     
     for (uchar i = 0; i < len; i++) {
         ushort char_idx = offset + i;
+        // 防止数组越界
+        if (char_idx >= BIP39_TOTAL_CHARS) break;
         ushort ulong_idx = char_idx >> 3;  // / 8
+        // 防止 ulong_idx 越界
+        if (ulong_idx >= BIP39_ULONG_COUNT) break;
         uchar bit_offset = (7 - (char_idx & 7)) << 3;  // % 8, then * 8
         dest[i] = (uchar)(WORD_DATA[ulong_idx] >> bit_offset);
     }

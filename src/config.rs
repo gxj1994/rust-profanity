@@ -23,7 +23,7 @@ impl SearchConfig {
             base_entropy,
             num_threads,
             condition,
-            check_interval: 65536,  // 增大检查间隔，减少全局内存访问
+            check_interval: 1024,   // 每1024次迭代检查一次，平衡性能和进度更新
         }
     }
 }
