@@ -45,9 +45,10 @@ inline bool increment_entropy(uchar entropy[32], uint step);
 inline void derive_address_from_entropy(const uchar entropy[32], uchar address[20]) {
     // ===== 内联 entropy_to_mnemonic 开始 =====
     // 计算校验和: SHA256 的前 8 位 (256/32 = 8)
-    uchar hash_checksum[32];
-    sha256(entropy, 32, hash_checksum);
-    uchar checksum_bits = hash_checksum[0]; // 取前8位
+    // 使用单个 hash 缓冲区，减少私有内存占用
+    uchar hash[32];
+    sha256(entropy, 32, hash);
+    uchar checksum_bits = hash[0]; // 取前8位
     
     // 组合: 256位熵 + 8位校验和 = 264位
     // 将数据视为大端序的位流
@@ -59,9 +60,8 @@ inline void derive_address_from_entropy(const uchar entropy[32], uchar address[2
     bits16[1] = ent16[1];
     all_bits[32] = checksum_bits;
     
-    // 提取24个11位索引 - 优化版本
-    // 使用 64 位加载减少内存访问
-    ushort words[24];
+    // 直接写入 local_mnemonic_t，避免 words[24] 临时数组
+    local_mnemonic_t mn;
     for (int i = 0; i < 24; i++) {
         int bit_offset = i * 11;
         int byte_idx = bit_offset >> 3;  // / 8
@@ -79,16 +79,9 @@ inline void derive_address_from_entropy(const uchar entropy[32], uchar address[2
         
         // 提取 11 位 (从大端序)
         val = val << bit_shift;
-        words[i] = (ushort)((val >> 21) & 0x7FF);  // 21 = 32 - 11
+        mn.words[i] = (ushort)((val >> 21) & 0x7FF);  // 21 = 32 - 11
     }
     // ===== 内联 entropy_to_mnemonic 结束 =====
-    
-    // 构建 local_mnemonic_t (使用 ushort 逐个复制，避免对齐问题)
-    local_mnemonic_t mn;
-    // 24 * 2 = 48 bytes，逐个复制避免未对齐访问
-    for (int i = 0; i < 24; i++) {
-        mn.words[i] = words[i];
-    }
     
     // 助记词 -> 私钥 (BIP39 + BIP32)
     uchar private_key[32];
@@ -99,7 +92,7 @@ inline void derive_address_from_entropy(const uchar entropy[32], uchar address[2
     private_to_public(private_key, public_key);
     
     // 公钥 -> Keccak-256 哈希 (跳过 0x04 前缀)
-    uchar hash[32];
+    // 复用上面的 hash 缓冲区
     keccak256(public_key + 1, 64, hash);
     
     // 取后 20 字节作为以太坊地址（逐字节复制，避免未对齐读写）
