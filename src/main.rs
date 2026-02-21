@@ -35,7 +35,7 @@ struct Args {
     leading_zeros: Option<u32>,
     
     /// GPU 线程数
-    #[arg(short, long, default_value = "96")]
+    #[arg(short, long, default_value = "1024")]
     threads: u32,
     
     /// 本地工作组大小
