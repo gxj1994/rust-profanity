@@ -1,6 +1,6 @@
 //! OpenCL 内核加载与执行
 
-use ocl::{Buffer, Kernel, Program, SpatialDims};
+use ocl::{Buffer, Event, Kernel, Program, SpatialDims};
 use log::{info, debug};
 
 use crate::config::{SearchConfig, SearchResult};
@@ -19,6 +19,10 @@ pub struct SearchKernel {
     result_buffer: Buffer<u8>,
     /// 全局标志缓冲区
     flag_buffer: Buffer<i32>,
+    /// 非阻塞读取 found 标志的主机缓冲
+    flag_read_buf: Vec<i32>,
+    /// 非阻塞读取 found 标志的事件
+    flag_read_event: Option<Event>,
 }
 
 impl SearchKernel {
@@ -77,6 +81,8 @@ impl SearchKernel {
             config_buffer,
             result_buffer,
             flag_buffer,
+            flag_read_buf: vec![0],
+            flag_read_event: None,
         })
     }
     
@@ -115,15 +121,33 @@ impl SearchKernel {
         Ok(())
     }
     
-    /// 检查结果是否找到（非阻塞方式）
-    pub fn check_found(&self) -> anyhow::Result<bool> {
-        let mut flag: Vec<i32> = vec![0];
-        
-        // 使用阻塞读取，但设置一个较小的超时
-        // 直接读取，不创建事件，简化逻辑
-        self.flag_buffer.read(&mut flag).enq()?;
-        
-        Ok(flag[0] != 0)
+    /// 非阻塞轮询 found 标志
+    /// - Ok(Some(bool)): 读取完成，返回 found 状态
+    /// - Ok(None): 读取尚未完成
+    pub fn poll_found(&mut self) -> anyhow::Result<Option<bool>> {
+        if self.flag_read_event.is_none() {
+            let mut evt = Event::empty();
+            unsafe {
+                self.flag_buffer
+                    .cmd()
+                    .read(&mut self.flag_read_buf)
+                    .block(false)
+                    .enew(&mut evt)
+                    .enq()?;
+            }
+            self.flag_read_event = Some(evt);
+            return Ok(None);
+        }
+
+        if let Some(ref evt) = self.flag_read_event {
+            if evt.is_complete()? {
+                let found = self.flag_read_buf[0] != 0;
+                self.flag_read_event = None;
+                return Ok(Some(found));
+            }
+        }
+
+        Ok(None)
     }
     
     /// 读取搜索结果

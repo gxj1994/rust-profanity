@@ -7,6 +7,7 @@
 
 use clap::Parser;
 use log::info;
+use std::io::{self, Write};
 use std::time::{Duration, Instant};
 use std::thread::sleep;
 
@@ -133,6 +134,18 @@ fn load_kernel_source() -> anyhow::Result<String> {
     Ok(source)
 }
 
+/// 打印进度到同一行（仅显示运行时间）
+fn print_progress_line(elapsed: f64) {
+    print!("\r[搜索中] 已运行 {:>6.1}s", elapsed);
+    io::stdout().flush().unwrap();
+}
+
+/// 清除当前进度行
+fn clear_progress_line() {
+    print!("\r{:>40}\r", " ");
+    io::stdout().flush().unwrap();
+}
+
 /// 主函数
 fn main() -> anyhow::Result<()> {
     // 初始化日志
@@ -163,7 +176,7 @@ fn main() -> anyhow::Result<()> {
     info!("加载 OpenCL 内核...");
     // 使用完整版内核 (包含完整加密实现)
     let kernel_source = load_kernel_source()?;
-    let search_kernel = SearchKernel::new(&ctx, &kernel_source)?;
+    let mut search_kernel = SearchKernel::new(&ctx, &kernel_source)?;
     
     // 5. 准备配置数据
     // 验证助记词校验和
@@ -188,7 +201,7 @@ fn main() -> anyhow::Result<()> {
     // 7. 轮询等待结果并读取
     info!("开始轮询等待结果...");
     let mut found = false;
-    let mut poll_count = 0;
+    let mut progress_printed = false;
     let timeout_enabled = args.timeout > 0;
     let timeout_secs = args.timeout;
     let mut result = SearchResult::default();
@@ -204,33 +217,28 @@ fn main() -> anyhow::Result<()> {
         }
         
         // 检查是否找到（原子读取标志）
-        if search_kernel.check_found()? {
-            found = true;
-            // 读取结果
-            result = search_kernel.read_result()?;
-            break;
-        }
-        
-        // 显示进度
-        poll_count += 1;
-        if poll_count % 10 == 0 {
-            let elapsed = start_time.elapsed().as_secs_f64();
-            // 读取结果统计
-            if let Ok(r) = search_kernel.read_result() {
-                result = r;
-                let checked = result.total_checked();
-                let speed = if elapsed > 0.0 { checked as f64 / elapsed } else { 0.0 };
-                info!(
-                    "搜索中... 已运行 {:.1} 秒 | 已检查 {} 个地址 | 速度 {:.0} 地址/秒",
-                    elapsed, checked, speed
-                );
+        if let Some(is_found) = search_kernel.poll_found()? {
+            if is_found {
+                found = true;
+                // 读取结果
+                result = search_kernel.read_result()?;
+                break;
             }
         }
+        
+        // 显示进度（仅运行时间）
+        let elapsed = start_time.elapsed().as_secs_f64();
+        print_progress_line(elapsed);
+        progress_printed = true;
         
         // 等待一段时间再检查
         sleep(Duration::from_millis(args.poll_interval));
     }
     
+    if progress_printed {
+        clear_progress_line();
+    }
+
     // 如果超时但还未读取到结果，尝试读取一次
     if !found {
         if let Ok(r) = search_kernel.read_result() {
@@ -244,8 +252,7 @@ fn main() -> anyhow::Result<()> {
     // 9. 输出结果
     println!();
     println!("========================================");
-    
-    // 计算统计信息
+
     let total_checked = result.total_checked();
     let speed = if elapsed.as_secs_f64() > 0.0 {
         total_checked as f64 / elapsed.as_secs_f64()
