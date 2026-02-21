@@ -155,12 +155,14 @@ pub fn search(request: SearchRequest) -> anyhow::Result<SearchResponse> {
     let start_time = Instant::now();
     let mut found: Option<usize> = None;
     let mut result = SearchResult::default();
+    let mut timed_out_in_loop = false;
 
     loop {
         let timed_out = request
             .timeout
             .is_some_and(|timeout| start_time.elapsed() >= timeout);
         if timed_out {
+            timed_out_in_loop = true;
             break;
         }
 
@@ -181,7 +183,7 @@ pub fn search(request: SearchRequest) -> anyhow::Result<SearchResponse> {
         sleep(request.poll_interval);
     }
 
-    if found.is_none() {
+    if !timed_out_in_loop && found.is_none() {
         for (idx, worker) in workers.iter().enumerate() {
             if let Ok(r) = worker.kernel.read_result() {
                 if r.found != 0 {
@@ -194,15 +196,19 @@ pub fn search(request: SearchRequest) -> anyhow::Result<SearchResponse> {
     }
 
     let elapsed = start_time.elapsed();
-    let timed_out = request.timeout.is_some_and(|timeout| elapsed >= timeout);
-    let total_checked: u64 = workers
-        .iter()
-        .map(|w| w.kernel.read_total_checked(w.threads).unwrap_or(0))
-        .sum();
-    let total_checked = if total_checked > 0 {
-        total_checked
+    let timed_out = timed_out_in_loop || request.timeout.is_some_and(|timeout| elapsed >= timeout);
+    let total_checked = if timed_out_in_loop {
+        0
     } else {
-        result.total_checked()
+        let total_checked: u64 = workers
+            .iter()
+            .map(|w| w.kernel.read_total_checked(w.threads).unwrap_or(0))
+            .sum();
+        if total_checked > 0 {
+            total_checked
+        } else {
+            result.total_checked()
+        }
     };
     let speed = if elapsed.as_secs_f64() > 0.0 {
         total_checked as f64 / elapsed.as_secs_f64()
@@ -212,7 +218,7 @@ pub fn search(request: SearchRequest) -> anyhow::Result<SearchResponse> {
 
     if found.is_some() {
         sleep(Duration::from_millis(500));
-    } else {
+    } else if !timed_out_in_loop {
         for worker in &workers {
             let _ = worker.kernel.wait();
         }

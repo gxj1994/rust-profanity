@@ -187,6 +187,15 @@ impl SearchKernel {
         Ok(())
     }
 
+    /// 请求停止内核搜索
+    ///
+    /// 将全局 found 标志置为 1，内核会在下一次检查该标志时尽快退出。
+    pub fn request_stop(&self) -> anyhow::Result<()> {
+        let stop_flag = vec![1i32];
+        self.flag_buffer.write(&stop_flag).enq()?;
+        Ok(())
+    }
+
     /// 读取总检查次数（主机侧对每线程计数求和）
     pub fn read_total_checked(&self, active_threads: usize) -> anyhow::Result<u64> {
         let n = active_threads.min(self.thread_checked_len);

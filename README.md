@@ -64,20 +64,6 @@ rust-profanity = { git = "https://github.com/gxj1994/rust-profanity" }
 rust-profanity = { git = "https://github.com/gxj1994/rust-profanity", branch = "main" }
 ```
 
-### 从源码编译
-
-```bash
-# 克隆仓库
-git clone https://github.com/gxj1994/rust-profanity.git
-cd rust-profanity
-
-# 编译 Release 版本
-cargo build --release
-
-# 运行测试
-cargo test
-```
-
 ## 使用方法
 
 ### Rust 代码调用（库接口）
@@ -105,6 +91,20 @@ fn main() -> anyhow::Result<()> {
 
     Ok(())
 }
+```
+
+### 从源码编译
+
+```bash
+# 克隆仓库
+git clone https://github.com/gxj1994/rust-profanity.git
+cd rust-profanity
+
+# 编译 Release 版本
+cargo build --release
+
+# 运行测试
+cargo test
 ```
 
 ### 前缀匹配
