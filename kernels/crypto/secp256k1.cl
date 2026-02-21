@@ -31,22 +31,30 @@ __constant const mp_number Gy = {
     {0xfb10d4b8, 0x9c47d08f, 0xa6855419, 0xfd17b448, 0x0e1108a8, 0x5da4fbfc, 0x26a3c465, 0x483ada77}
 };
 
+
+
 // 计算乘法的高 32 位（使用内置函数）
 // OpenCL 内置 mul_hi 函数可用
 
-// 从字节数组加载 mp_number (大端序) - 使用 vload4 优化
+// 从字节数组加载 mp_number (大端序)
 void mp_from_bytes(const uchar bytes[32], mp_number* result) {
     for (int i = 0; i < 8; i++) {
-        // vload4 加载小端序数据，需要交换字节序
-        result->d[7 - i] = as_uint(rotate(vload4(i, bytes).s3210, (uint4)0));
+        int offset = i * 4;
+        result->d[7 - i] = ((uint)bytes[offset] << 24) |
+                           ((uint)bytes[offset + 1] << 16) |
+                           ((uint)bytes[offset + 2] << 8) |
+                           ((uint)bytes[offset + 3]);
     }
 }
 
-// 将 mp_number 保存到字节数组 (大端序) - 使用 vstore4 优化
+// 将 mp_number 保存到字节数组 (大端序)
 void mp_to_bytes(const mp_number* a, uchar bytes[32]) {
     for (int i = 0; i < 8; i++) {
-        uint4 val = (uint4)(rotate(a->d[7 - i], (uint)0));
-        vstore4(as_uchar4(rotate(val, (uint4)0)).s3210, i, bytes);
+        int offset = i * 4;
+        bytes[offset] = (uchar)(a->d[7 - i] >> 24);
+        bytes[offset + 1] = (uchar)(a->d[7 - i] >> 16);
+        bytes[offset + 2] = (uchar)(a->d[7 - i] >> 8);
+        bytes[offset + 3] = (uchar)a->d[7 - i];
     }
 }
 
@@ -341,6 +349,68 @@ typedef struct {
 	mp_number y;
 } point;
 
+/* ------------------------------------------------------------------------ */
+/* 预计算基点 G 的倍数表 (窗口大小为4，16个点)                               */
+/* PRECOMPUTED_G[i] = (2*i + 1) * G, i = 0..15                            */
+/* 只存储奇数倍，偶数倍可以通过点加倍得到                                     */
+/* 使用 Python fastecdsa 库计算生成                                          */
+/* ------------------------------------------------------------------------ */
+// 预计算表数据 - 使用宏简化初始化
+#define MP_NUM(a0,a1,a2,a3,a4,a5,a6,a7) {{{a0,a1,a2,a3,a4,a5,a6,a7}}}
+
+__constant const point PRECOMPUTED_G[16] = {
+    // 1*G (索引 0)
+    {MP_NUM(0x16f81798, 0x59f2815b, 0x2dce28d9, 0x029bfcdb, 0xce870b07, 0x55a06295, 0xf9dcbbac, 0x79be667e),
+     MP_NUM(0xfb10d4b8, 0x9c47d08f, 0xa6855419, 0xfd17b448, 0x0e1108a8, 0x5da4fbfc, 0x26a3c465, 0x483ada77)},
+    // 3*G (索引 1)
+    {MP_NUM(0xbce036f9, 0x8601f113, 0x836f99b0, 0xb531c845, 0xf89d5229, 0x49344f85, 0x9258c310, 0xf9308a01),
+     MP_NUM(0x84b8e672, 0x6cb9fd75, 0x34c2231b, 0x6500a999, 0x2a37f356, 0x0fe337e6, 0x632de814, 0x388f7b0f)},
+    // 5*G (索引 2)
+    {MP_NUM(0xb240efe4, 0xcba8d569, 0xdc619ab7, 0xe88b84bd, 0x0a5c5128, 0x55b4a725, 0x1a072093, 0x2f8bde4d),
+     MP_NUM(0xa6ac62d6, 0xdca87d3a, 0xab0d6840, 0xf788271b, 0xa6c9c426, 0xd4dba9dd, 0x36e5e3d6, 0xd8ac2226)},
+    // 7*G (索引 3)
+    {MP_NUM(0xcac4f9bc, 0xe92bdded, 0x0330e39c, 0x3d419b7e, 0xf2ea7a0e, 0xa398f365, 0x6e5db4ea, 0x5cbdf064),
+     MP_NUM(0x087264da, 0xa5082628, 0x13fde7b5, 0xa813d0b8, 0x861a54db, 0xa3178d6d, 0xba255960, 0x6aebca40)},
+    // 9*G (索引 4)
+    {MP_NUM(0xfc27ccbe, 0xc35f110d, 0x4c57e714, 0xe0979697, 0x9f559abd, 0x09ad178a, 0xf0c7f653, 0xacd484e2),
+     MP_NUM(0xc64f9c37, 0x05cc262a, 0x375f8e0f, 0xadd888a4, 0x763b61e9, 0x64380971, 0xb0a7d9fd, 0xcc338921)},
+    // 11*G (索引 5)
+    {MP_NUM(0x5da008cb, 0xbbec1789, 0xe5c17891, 0x5649980b, 0x70c65aac, 0x5ef4246b, 0x58a9411e, 0x774ae7f8),
+     MP_NUM(0xc953c61b, 0x301d74c9, 0xdff9d6a8, 0x372db1e2, 0xd7b7b365, 0x0243dd56, 0xeb6b5e19, 0xd984a032)},
+    // 13*G (索引 6)
+    {MP_NUM(0x19405aa8, 0xdeeddf8f, 0x610e58cd, 0xb075fbc6, 0xc3748651, 0xc7d1d205, 0xd975288b, 0xf28773c2),
+     MP_NUM(0xdb03ed81, 0x29b5cb52, 0x521fa91f, 0x3a1a06da, 0x65cdaf47, 0x758212eb, 0x8d880a89, 0x0ab0902e)},
+    // 15*G (索引 7)
+    {MP_NUM(0xe27e080e, 0x44adbcf8, 0x3c85f79e, 0x31e5946f, 0x095ff411, 0x5a465ae3, 0x7d43ea96, 0xd7924d4f),
+     MP_NUM(0xf6a26b58, 0xc504dc9f, 0xd896d3a5, 0xea40af2b, 0x28cc6def, 0x83842ec2, 0xa86c72a6, 0x581e2872)},
+    // 17*G (索引 8)
+    {MP_NUM(0x4a2d4a34, 0x66e4faa0, 0x79b97687, 0xeb9898ae, 0x07eacf21, 0xa420fee8, 0xdb677750, 0xdefdea4c),
+     MP_NUM(0x9e56eb77, 0xcfb199f6, 0x4a95c0f6, 0xced1f4a0, 0xd2a93dae, 0xe997b0ea, 0x94635168, 0x4211ab06)},
+    // 19*G (索引 9)
+    {MP_NUM(0x38385b6c, 0x74756561, 0xd7e86d27, 0xf06acfeb, 0x444f4979, 0x93ef5cff, 0x97a443d2, 0x2b4ea0a7),
+     MP_NUM(0xe5c09b7a, 0xb570c854, 0x50269763, 0x1a01f60c, 0x5a1c8613, 0xb343083b, 0x37945d93, 0x85e89bc0)},
+    // 21*G (索引 10)
+    {MP_NUM(0x25be59d5, 0x81340aef, 0x71f81071, 0x1d9ad402, 0x2ce33330, 0x4f93fa33, 0x4cdd1256, 0x352bbf4a),
+     MP_NUM(0xcf81998c, 0x67bd3d8b, 0x71b1039c, 0x4a1b3b2e, 0x9dda3e1f, 0xd59c1825, 0x5348f534, 0x321eb407)},
+    // 23*G (索引 11)
+    {MP_NUM(0x4ecacc3f, 0xdc9cdadd, 0xeff5ff29, 0xe42ab8df, 0x59879124, 0x02300105, 0x6b38d11b, 0x2fa2104d),
+     MP_NUM(0x532b7d67, 0x423ba76b, 0xfc882648, 0x181d70ec, 0x5bd5dd80, 0xb6456933, 0x295dd865, 0x02de1068)},
+    // 25*G (索引 12)
+    {MP_NUM(0xf5453714, 0x69ca0cd7, 0xe09572e2, 0x263c3d84, 0x66edda83, 0xab21a9b0, 0x09b4d68d, 0x9248279b),
+     MP_NUM(0x97cb3402, 0xe54a32ce, 0x887912ff, 0x3fc0de2a, 0xdea2b1ff, 0x5d1aa71b, 0xf234aade, 0x73016f7b)},
+    // 27*G (索引 13)
+    {MP_NUM(0x3dee8729, 0x7e996d44, 0x4bf615c0, 0x2f570e14, 0xb0beb752, 0x8e70132f, 0xe3a8bf27, 0xdaed4f2b),
+     MP_NUM(0x90be1c55, 0xab40e522, 0xf3afa726, 0x3f83c230, 0x7ef8d700, 0xd4a1aca8, 0x7d6c98e8, 0xa69dce4a)},
+    // 29*G (索引 14)
+    {MP_NUM(0x7d22e7db, 0xe6a3b5e8, 0xfdf281b0, 0x11ecd9e9, 0xcbb19f90, 0x8acf28d7, 0x065d812e, 0xc44d12c7),
+     MP_NUM(0x0e0e6482, 0xa039063f, 0x1edf61c5, 0x0e106e86, 0xc982fdac, 0x76c45926, 0xce326cdc, 0x2119a460)},
+    // 31*G (索引 15)
+    {MP_NUM(0xd269e6b4, 0xb61c65cb, 0x36c28063, 0x152b6953, 0xded60853, 0xc89a20cf, 0xdc698504, 0x6a245bf6),
+     MP_NUM(0x100d8a82, 0xfd5e6348, 0xd0423b6e, 0x8b33ba48, 0xf16a24ad, 0x8b3f5126, 0xc2bd4a70, 0xe022cf42)}
+};
+
+#undef MP_NUM
+
 // 辅助函数：比较两个 mp_number
 int mp_cmp(const mp_number* a, const mp_number* b) {
     for (int i = 7; i >= 0; i--) {
@@ -372,7 +442,16 @@ int jacobian_is_infinity(const jacobian_point* p) {
     return mp_is_zero(&p->Z);
 }
 
-// 从仿射坐标创建 Jacobian 点
+// 从仿射坐标创建 Jacobian 点 (支持 __constant 地址空间)
+void affine_to_jacobian_c(jacobian_point* r, const __constant point* p) {
+    r->X = p->x;
+    r->Y = p->y;
+    // Z = 1
+    r->Z.d[0] = 1; r->Z.d[1] = 0; r->Z.d[2] = 0; r->Z.d[3] = 0;
+    r->Z.d[4] = 0; r->Z.d[5] = 0; r->Z.d[6] = 0; r->Z.d[7] = 0;
+}
+
+// 从仿射坐标创建 Jacobian 点 (标准版本)
 void affine_to_jacobian(jacobian_point* r, const point* p) {
     r->X = p->x;
     r->Y = p->y;
@@ -450,8 +529,93 @@ void jacobian_double(jacobian_point* r, const jacobian_point* p) {
 }
 
 // Jacobian 点加法: R = P + Q (Q 是仿射坐标点，Z=1)
-// 混合加法公式 (madd-2007-bl)
+// 混合加法公式 (madd-2007-bl) - 支持 __constant 地址空间
 // 来源: http://hyperelliptic.org/EFD/g1p/auto-shortw-jacobian.html#addition-madd-2007-bl
+void jacobian_add_affine_c(jacobian_point* r, const jacobian_point* p, const __constant point* q) {
+    if (jacobian_is_infinity(p)) {
+        affine_to_jacobian_c(r, q);
+        return;
+    }
+    
+    // 将 __constant point 复制到私有内存
+    point q_private;
+    q_private.x = q->x;
+    q_private.y = q->y;
+    
+    // 检查 Q 是否为无穷远点
+    mp_number zero = {{0,0,0,0,0,0,0,0}};
+    if (mp_cmp(&q_private.x, &zero) == 0 && mp_cmp(&q_private.y, &zero) == 0) {
+        *r = *p;
+        return;
+    }
+    
+    mp_number Z1Z1, Z1Z1Z1, U2, S2, H, HH, I, J, V;
+    mp_number t1, t2;
+    
+    // Z1Z1 = Z1^2
+    mp_mod_mul(&Z1Z1, &p->Z, &p->Z);
+    // Z1Z1Z1 = Z1*Z1Z1
+    mp_mod_mul(&Z1Z1Z1, &p->Z, &Z1Z1);
+    // U2 = X2*Z1Z1
+    mp_mod_mul(&U2, &q_private.x, &Z1Z1);
+    // S2 = Y2*Z1Z1Z1
+    mp_mod_mul(&S2, &q_private.y, &Z1Z1Z1);
+    // H = U2-X1
+    mp_mod_sub(&H, &U2, &p->X);
+    
+    // 检查 H 是否为 0（即 P 和 Q 有相同的 X 坐标）
+    if (mp_cmp(&H, &zero) == 0) {
+        // 需要判断 Y 的关系
+        mp_number sumY;
+        mp_mod_add(&sumY, &S2, &p->Y);  // sumY = S2 + Y1
+        if (mp_cmp(&S2, &p->Y) == 0) {
+            // S2 == Y1，则 Q = P，执行点加倍
+            jacobian_double(r, p);
+        } else if (mp_is_zero(&sumY)) {
+            // S2 == -Y1，则 Q = -P，结果为无穷远点
+            jacobian_set_infinity(r);
+        } else {
+            // 理论上不会发生，置为无穷远点
+            jacobian_set_infinity(r);
+        }
+        return;
+    }
+    
+    // HH = H^2
+    mp_mod_mul(&HH, &H, &H);
+    // I = 4*HH
+    mp_mod_add(&t1, &HH, &HH);
+    mp_mod_add(&I, &t1, &t1);
+    // J = H*I
+    mp_mod_mul(&J, &H, &I);
+    // V = X1*I
+    mp_mod_mul(&V, &p->X, &I);
+    
+    // t1 = 2*(S2-Y1)
+    mp_mod_sub(&t1, &S2, &p->Y);
+    mp_mod_add(&t2, &t1, &t1);
+    
+    // X3 = t2^2 - J - 2*V
+    mp_mod_mul(&t1, &t2, &t2);
+    mp_mod_sub(&t1, &t1, &J);
+    mp_mod_sub(&t1, &t1, &V);
+    mp_mod_sub(&r->X, &t1, &V);
+    
+    // Y3 = t2*(V-X3) - 2*Y1*J
+    mp_mod_sub(&t1, &V, &r->X);
+    mp_mod_mul(&V, &t2, &t1);
+    mp_mod_mul(&t1, &p->Y, &J);
+    mp_mod_add(&t2, &t1, &t1);
+    mp_mod_sub(&r->Y, &V, &t2);
+    
+    // Z3 = (Z1+H)^2 - Z1Z1 - HH
+    mp_mod_add(&t1, &p->Z, &H);
+    mp_mod_mul(&t2, &t1, &t1);
+    mp_mod_sub(&t1, &t2, &Z1Z1);
+    mp_mod_sub(&r->Z, &t1, &HH);
+}
+
+// Jacobian 点加法: R = P + Q (Q 是仿射坐标点，Z=1) - 标准版本
 void jacobian_add_affine(jacobian_point* r, const jacobian_point* p, const point* q) {
     if (jacobian_is_infinity(p)) {
         affine_to_jacobian(r, q);
@@ -676,7 +840,7 @@ void scalar_mult_base(const uchar scalar[32], uchar result[65]) {
 }
 
 // 使用 Jacobian 射影坐标的标量乘法: result = scalar * G
-// 性能优化：避免每次迭代都进行模逆运算
+// 基础版本：双倍-加法算法，每次点加/倍乘都涉及模乘和模逆（仅在最后转换时调用一次模逆）
 void scalar_mult_base_jacobian(const uchar scalar[32], uchar result[65]) {
     // 如果私钥为零，返回无穷远点
     mp_number priv_key;
@@ -713,6 +877,114 @@ void scalar_mult_base_jacobian(const uchar scalar[32], uchar result[65]) {
                 } else {
                     // r = r + G (混合加法)
                     jacobian_add_affine(&r, &r, &g_affine);
+                }
+            }
+        }
+    }
+    
+    // 转换回仿射坐标
+    point result_affine;
+    jacobian_to_affine(&result_affine, &r);
+    
+    // 输出未压缩公钥格式: 0x04 + x(32字节) + y(32字节)
+    result[0] = 0x04;
+    mp_to_bytes(&result_affine.x, result + 1);
+    mp_to_bytes(&result_affine.y, result + 33);
+}
+
+// 使用预计算表的窗口标量乘法: result = scalar * G
+// 优化版本：4-bit 窗口，使用预计算的奇数倍点表
+// PRECOMPUTED_G[i] = (2*i + 1) * G, i = 0..15
+// 将256位标量分成64个4-bit窗口，每窗口处理4次点加倍 + 1次点加
+void scalar_mult_base_jacobian_windowed(const uchar scalar[32], uchar result[65]) {
+    // 如果私钥为零，返回无穷远点
+    mp_number priv_key;
+    mp_from_bytes(scalar, &priv_key);
+    if (mp_is_zero(&priv_key)) {
+        result[0] = 0x04;
+        for (int i = 1; i < 65; i++) result[i] = 0;
+        return;
+    }
+    
+    // 结果初始化为无穷远点（Jacobian 坐标）
+    jacobian_point r;
+    jacobian_set_infinity(&r);
+    
+    // 从最高位开始处理（大端序）
+    // 256位 = 64个4-bit窗口，从最高有效窗口开始
+    for (int i = 0; i < 32; i++) {
+        // 每个字节分成两个4-bit窗口
+        // 高4位
+        uchar high_nibble = (scalar[i] >> 4) & 0x0F;
+        // 低4位
+        uchar low_nibble = scalar[i] & 0x0F;
+        
+        // 处理高4位窗口
+        // 4次点加倍
+        for (int j = 0; j < 4; j++) {
+            if (!jacobian_is_infinity(&r)) {
+                jacobian_double(&r, &r);
+            }
+        }
+        // 如果窗口值非零，加上对应的预计算点
+        if (high_nibble != 0) {
+            // 将窗口值映射到预计算表索引
+            // 窗口值 1..15 对应索引 0..7 (奇数: 1,3,5,...,15)
+            // 窗口值 2..14 对应偶数，需要通过奇数点加倍得到
+            uchar idx = (high_nibble - 1) >> 1;  // (high_nibble - 1) / 2
+            if (high_nibble & 1) {
+                // 奇数：直接使用预计算表
+                if (jacobian_is_infinity(&r)) {
+                    affine_to_jacobian_c(&r, &PRECOMPUTED_G[idx]);
+                } else {
+                    jacobian_add_affine_c(&r, &r, &PRECOMPUTED_G[idx]);
+                }
+            } else {
+                // 偶数：使用预计算点加倍
+                // 例如 2*G = 2*(1*G)，4*G = 2*(2*G) 等
+                // 这里简化处理：使用 (high_nibble/2) * G 然后加倍
+                jacobian_point temp;
+                affine_to_jacobian_c(&temp, &PRECOMPUTED_G[idx]);
+                jacobian_double(&temp, &temp);
+                if (jacobian_is_infinity(&r)) {
+                    r = temp;
+                } else {
+                    // 将 temp 转回仿射坐标再混合加法
+                    point temp_affine;
+                    jacobian_to_affine(&temp_affine, &temp);
+                    jacobian_add_affine(&r, &r, &temp_affine);
+                }
+            }
+        }
+        
+        // 处理低4位窗口
+        // 4次点加倍
+        for (int j = 0; j < 4; j++) {
+            if (!jacobian_is_infinity(&r)) {
+                jacobian_double(&r, &r);
+            }
+        }
+        // 如果窗口值非零，加上对应的预计算点
+        if (low_nibble != 0) {
+            uchar idx = (low_nibble - 1) >> 1;
+            if (low_nibble & 1) {
+                // 奇数
+                if (jacobian_is_infinity(&r)) {
+                    affine_to_jacobian_c(&r, &PRECOMPUTED_G[idx]);
+                } else {
+                    jacobian_add_affine_c(&r, &r, &PRECOMPUTED_G[idx]);
+                }
+            } else {
+                // 偶数
+                jacobian_point temp;
+                affine_to_jacobian_c(&temp, &PRECOMPUTED_G[idx]);
+                jacobian_double(&temp, &temp);
+                if (jacobian_is_infinity(&r)) {
+                    r = temp;
+                } else {
+                    point temp_affine;
+                    jacobian_to_affine(&temp_affine, &temp);
+                    jacobian_add_affine(&r, &r, &temp_affine);
                 }
             }
         }

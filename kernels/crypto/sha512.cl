@@ -97,10 +97,17 @@ void sha512_compress(ulong state[8], const uchar block[128]) {
     ulong a, b, c, d, e, f, g, h;
     ulong T1, T2;
     
-    // 准备消息调度 - 使用 vload8 优化大端序加载
-    // 注意: vload8 按小端序解释数据，需要字节交换
+    // 准备消息调度 - 大端序加载
     for (uint i = 0; i < 16; i++) {
-        W[i] = as_ulong(rotate(vload8(i, block).s76543210, (ulong8)0));
+        uint offset = i * 8;
+        W[i] = ((ulong)block[offset] << 56) |
+               ((ulong)block[offset + 1] << 48) |
+               ((ulong)block[offset + 2] << 40) |
+               ((ulong)block[offset + 3] << 32) |
+               ((ulong)block[offset + 4] << 24) |
+               ((ulong)block[offset + 5] << 16) |
+               ((ulong)block[offset + 6] << 8) |
+               ((ulong)block[offset + 7]);
     }
     
     for (uint i = 16; i < 80; i++) {
@@ -210,10 +217,17 @@ void sha512(const uchar* data, uint len, uchar hash[64]) {
         sha512_compress(state, block);
     }
     
-    // 输出哈希 - 使用 vstore8 优化大端序存储
+    // 输出哈希 - 大端序存储
     for (uint i = 0; i < 8; i++) {
-        ulong8 val = (ulong8)(rotate(state[i], (ulong)0));
-        vstore8(as_uchar8(rotate(val, (ulong8)0)).s76543210, i, hash);
+        uint offset = i * 8;
+        hash[offset] = (uchar)(state[i] >> 56);
+        hash[offset + 1] = (uchar)(state[i] >> 48);
+        hash[offset + 2] = (uchar)(state[i] >> 40);
+        hash[offset + 3] = (uchar)(state[i] >> 32);
+        hash[offset + 4] = (uchar)(state[i] >> 24);
+        hash[offset + 5] = (uchar)(state[i] >> 16);
+        hash[offset + 6] = (uchar)(state[i] >> 8);
+        hash[offset + 7] = (uchar)state[i];
     }
 }
 
