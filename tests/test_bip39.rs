@@ -570,3 +570,111 @@ __kernel void test_address_from_entropy(
     
     println!("✓ OpenCL与Rust地址生成一致!");
 }
+
+/// 测试 Jacobian 标量乘法与原始实现的一致性
+#[test]
+fn test_jacobian_scalar_mult() {
+    use ocl::{ProQue, Buffer, MemFlags};
+    
+    // 读取内核源码
+    let kernel_source = std::fs::read_to_string(
+        concat!(env!("CARGO_MANIFEST_DIR"), "/kernels/crypto/secp256k1.cl")
+    ).expect("读取secp256k1.cl失败");
+    
+    // 构建测试内核
+    let test_kernel = r#"
+// 测试内核：比较两种标量乘法实现
+__kernel void test_scalar_mult_comparison_kernel(
+    __global uchar* result
+) {
+    // 测试私钥：2（测试点加倍，结果应该是 2*G）
+    uchar scalar[32] = {
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02
+    };
+    
+    uchar result_affine[65];
+    uchar result_jacobian[65];
+    
+    scalar_mult_base(scalar, result_affine);
+    scalar_mult_base_jacobian(scalar, result_jacobian);
+    
+    // 比较结果
+    int match = 1;
+    for (int i = 0; i < 65; i++) {
+        if (result_affine[i] != result_jacobian[i]) {
+            match = 0;
+            break;
+        }
+    }
+    
+    // 返回结果：前65字节是affine结果，接下来65字节是jacobian结果，最后一个字节是匹配标志
+    for (int i = 0; i < 65; i++) {
+        result[i] = result_affine[i];
+        result[i + 65] = result_jacobian[i];
+    }
+    result[130] = (uchar)match;
+}
+"#;
+    
+    let source = kernel_source + test_kernel;
+    
+    // 创建OpenCL上下文
+    let proque = match ProQue::builder()
+        .src(&source)
+        .dims(1)
+        .build() {
+        Ok(p) => p,
+        Err(e) => {
+            println!("OpenCL 不可用，跳过测试: {}", e);
+            return;
+        }
+    };
+    
+    // 输出缓冲区: 131字节 (65 + 65 + 1)
+    let result_buffer = Buffer::<u8>::builder()
+        .queue(proque.queue().clone())
+        .flags(MemFlags::WRITE_ONLY)
+        .len(131)
+        .build()
+        .expect("创建结果缓冲区失败");
+    
+    // 创建内核
+    let kernel = proque.kernel_builder("test_scalar_mult_comparison_kernel")
+        .arg(&result_buffer)
+        .build()
+        .expect("创建内核失败");
+    
+    // 执行内核
+    unsafe {
+        kernel.enq().expect("执行内核失败");
+    }
+    
+    // 读取结果
+    let mut result = vec![0u8; 131];
+    result_buffer.read(&mut result).enq().expect("读取结果失败");
+    
+    let match_flag = result[130];
+    let affine_hex = hex::encode(&result[0..65]);
+    let jacobian_hex = hex::encode(&result[65..130]);
+    
+    println!("Affine 结果:  {}", affine_hex);
+    println!("Jacobian 结果: {}", jacobian_hex);
+    println!("匹配标志: {}", match_flag);
+    
+    // 如果结果不匹配，打印差异
+    if match_flag == 0 {
+        println!("差异位置:");
+        for i in 0..65 {
+            if result[i] != result[i + 65] {
+                println!("  位置 {}: affine={:02x}, jacobian={:02x}", 
+                    i, result[i], result[i + 65]);
+            }
+        }
+    }
+    
+    assert_eq!(match_flag, 1, "Affine 和 Jacobian 标量乘法结果不匹配!");
+    println!("✓ Affine 和 Jacobian 标量乘法结果一致!");
+}

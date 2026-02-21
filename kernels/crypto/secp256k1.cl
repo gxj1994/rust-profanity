@@ -80,7 +80,8 @@ void mp_mod_sub(mp_number * const r, const mp_number * const a, const mp_number 
 
 	for (i = 0; i < MP_WORDS; ++i) {
 		t = a->d[i] - b->d[i] - c;
-		c = t < a->d[i] ? 0 : (t == a->d[i] ? c : 1);
+		// 正确的借位判断：如果 a < b + c，则产生借位
+		c = (a->d[i] < b->d[i] + c) ? 1 : 0;
 
 		r->d[i] = t;
 	}
@@ -342,8 +343,14 @@ typedef struct {
 	mp_number y;
 } point;
 
-// 前置声明
-int mp_cmp(const mp_number* a, const mp_number* b);
+// 辅助函数：比较两个 mp_number
+int mp_cmp(const mp_number* a, const mp_number* b) {
+    for (int i = 7; i >= 0; i--) {
+        if (a->d[i] < b->d[i]) return -1;
+        if (a->d[i] > b->d[i]) return 1;
+    }
+    return 0;
+}
 
 // Jacobian 射影坐标点 (X, Y, Z) 对应仿射坐标 (X/Z^2, Y/Z^3)
 typedef struct {
@@ -377,72 +384,76 @@ void affine_to_jacobian(jacobian_point* r, const point* p) {
 }
 
 // Jacobian 点加倍: R = 2*P
-// 公式 (来自 http://hyperelliptic.org/EFD/g1p/auto-shortw-jacobian.html#doubling-dbl-2007-bl)
-// delta = Z1^2
-// gamma = Y1^2
-// beta = X1*gamma
-// alpha = 3*(X1-delta)*(X1+delta)
-// X3 = alpha^2 - 8*beta
-// Z3 = (Y1+Z1)^2 - gamma - delta
-// Y3 = alpha*(4*beta - X3) - 8*gamma^2
+// 使用标准 secp256k1 曲线点加倍公式 (a=0, b=7)
+// 公式来源: http://hyperelliptic.org/EFD/g1p/auto-shortw-jacobian.html#doubling-dbl-2007-bl
+// 对于 a=0 的曲线，简化为:
+// XX = X1^2
+// YY = Y1^2
+// YYYY = YY^2
+// ZZ = Z1^2
+// S = 2*((X1+YY)^2 - XX - YYYY)
+// M = 3*XX + a*ZZ^2 = 3*XX (因为 a=0)
+// T = M^2 - 2*S
+// X3 = T
+// Y3 = M*(S-T) - 8*YYYY
+// Z3 = 2*Y1*Z1
 void jacobian_double(jacobian_point* r, const jacobian_point* p) {
     if (jacobian_is_infinity(p)) {
         *r = *p;
         return;
     }
     
-    mp_number delta, gamma, beta, alpha;
-    mp_number t1, t2, t3;
+    // 保存输入值，防止 r 和 p 指向同一地址时数据被覆盖
+    jacobian_point in = *p;
     
-    // delta = Z1^2
-    mp_mod_mul(&delta, &p->Z, &p->Z);
-    // gamma = Y1^2
-    mp_mod_mul(&gamma, &p->Y, &p->Y);
-    // beta = X1*gamma
-    mp_mod_mul(&beta, &p->X, &gamma);
+    mp_number XX, YY, YYYY, ZZ, S, M, T;
+    mp_number t1, t2;
     
-    // alpha = 3*(X1-delta)*(X1+delta)
-    mp_mod_sub(&t1, &p->X, &delta);  // t1 = X1 - delta
-    mp_mod_add(&t2, &p->X, &delta);  // t2 = X1 + delta
-    mp_mod_mul(&t3, &t1, &t2);       // t3 = (X1-delta)*(X1+delta)
-    mp_mod_add(&alpha, &t3, &t3);    // alpha = 2*t3
-    mp_mod_add(&alpha, &alpha, &t3); // alpha = 3*t3
+    // XX = X1^2
+    mp_mod_mul(&XX, &in.X, &in.X);
+    // YY = Y1^2
+    mp_mod_mul(&YY, &in.Y, &in.Y);
+    // YYYY = YY^2
+    mp_mod_mul(&YYYY, &YY, &YY);
+    // ZZ = Z1^2
+    mp_mod_mul(&ZZ, &in.Z, &in.Z);
     
-    // X3 = alpha^2 - 8*beta
-    mp_mod_mul(&t1, &alpha, &alpha); // t1 = alpha^2
-    mp_number eight_beta = beta;
-    mp_mod_add(&eight_beta, &eight_beta, &eight_beta); // 2*beta
-    mp_number four_beta = eight_beta;
-    mp_mod_add(&eight_beta, &eight_beta, &eight_beta); // 4*beta
-    mp_mod_add(&eight_beta, &eight_beta, &four_beta);  // 8*beta (修正)
-    // 重新计算 8*beta
-    mp_mod_add(&four_beta, &beta, &beta);  // 2*beta
-    mp_mod_add(&eight_beta, &four_beta, &four_beta); // 4*beta
-    mp_mod_add(&eight_beta, &eight_beta, &eight_beta); // 8*beta
+    // S = 2*((X1+YY)^2 - XX - YYYY)
+    mp_mod_add(&t1, &in.X, &YY);     // t1 = X1 + YY
+    mp_mod_mul(&t2, &t1, &t1);       // t2 = (X1+YY)^2
+    mp_mod_sub(&t1, &t2, &XX);       // t1 = (X1+YY)^2 - XX
+    mp_mod_sub(&t2, &t1, &YYYY);     // t2 = (X1+YY)^2 - XX - YYYY
+    mp_mod_add(&S, &t2, &t2);        // S = 2*((X1+YY)^2 - XX - YYYY)
     
-    mp_mod_sub(&r->X, &t1, &eight_beta);
+    // M = 3*XX (因为 secp256k1 的 a=0)
+    mp_mod_add(&t1, &XX, &XX);       // t1 = 2*XX
+    mp_mod_add(&M, &t1, &XX);        // M = 3*XX
     
-    // Z3 = (Y1+Z1)^2 - gamma - delta
-    mp_mod_add(&t1, &p->Y, &p->Z);   // t1 = Y1 + Z1
-    mp_mod_mul(&t2, &t1, &t1);       // t2 = (Y1+Z1)^2
-    mp_mod_sub(&t1, &t2, &gamma);    // t1 = (Y1+Z1)^2 - gamma
-    mp_mod_sub(&r->Z, &t1, &delta);  // Z3 = (Y1+Z1)^2 - gamma - delta
+    // T = M^2 - 2*S
+    mp_mod_mul(&t1, &M, &M);         // t1 = M^2
+    mp_mod_add(&t2, &S, &S);         // t2 = 2*S
+    mp_mod_sub(&T, &t1, &t2);        // T = M^2 - 2*S
     
-    // Y3 = alpha*(4*beta - X3) - 8*gamma^2
-    mp_mod_sub(&t1, &four_beta, &r->X); // t1 = 4*beta - X3
-    mp_mod_mul(&t2, &alpha, &t1);       // t2 = alpha*(4*beta - X3)
+    // X3 = T
+    r->X = T;
     
-    mp_mod_mul(&t3, &gamma, &gamma);    // t3 = gamma^2
-    mp_number eight_gamma2 = t3;
-    mp_mod_add(&eight_gamma2, &eight_gamma2, &eight_gamma2); // 2*gamma^2
-    mp_mod_add(&t1, &eight_gamma2, &eight_gamma2);           // 4*gamma^2
-    mp_mod_add(&eight_gamma2, &t1, &t1);                     // 8*gamma^2
+    // Y3 = M*(S-T) - 8*YYYY
+    mp_mod_sub(&t1, &S, &T);         // t1 = S - T
+    mp_mod_mul(&t2, &M, &t1);        // t2 = M*(S-T)
+    mp_number eight_YYYY;
+    mp_mod_add(&eight_YYYY, &YYYY, &YYYY);  // 2*YYYY
+    mp_mod_add(&t1, &eight_YYYY, &eight_YYYY); // 4*YYYY
+    mp_mod_add(&eight_YYYY, &t1, &t1);     // 8*YYYY
+    mp_mod_sub(&r->Y, &t2, &eight_YYYY);
     
-    mp_mod_sub(&r->Y, &t2, &eight_gamma2);
+    // Z3 = 2*Y1*Z1
+    mp_mod_add(&t1, &in.Y, &in.Y);   // t1 = 2*Y1
+    mp_mod_mul(&r->Z, &t1, &in.Z);   // Z3 = 2*Y1*Z1
 }
 
 // Jacobian 点加法: R = P + Q (Q 是仿射坐标点，Z=1)
-// 混合加法公式 (来自 http://hyperelliptic.org/EFD/g1p/auto-shortw-jacobian.html#addition-add-2007-bl)
+// 混合加法公式 (madd-2007-bl)
+// 来源: http://hyperelliptic.org/EFD/g1p/auto-shortw-jacobian.html#addition-madd-2007-bl
 void jacobian_add_affine(jacobian_point* r, const jacobian_point* p, const point* q) {
     if (jacobian_is_infinity(p)) {
         affine_to_jacobian(r, q);
@@ -456,7 +467,7 @@ void jacobian_add_affine(jacobian_point* r, const jacobian_point* p, const point
         return;
     }
     
-    mp_number Z1Z1, Z1Z1Z1, U2, S2, H, I, J, V;
+    mp_number Z1Z1, Z1Z1Z1, U2, S2, H, HH, I, J, V;
     mp_number t1, t2;
     
     // Z1Z1 = Z1^2
@@ -469,46 +480,57 @@ void jacobian_add_affine(jacobian_point* r, const jacobian_point* p, const point
     mp_mod_mul(&S2, &q->y, &Z1Z1Z1);
     // H = U2-X1
     mp_mod_sub(&H, &U2, &p->X);
-    // I = (2*H)^2
-    mp_mod_add(&t1, &H, &H);
-    mp_mod_mul(&I, &t1, &t1);
+    
+    // 检查 H 是否为 0（即 P 和 Q 有相同的 X 坐标）
+    if (mp_cmp(&H, &zero) == 0) {
+        // 需要判断 Y 的关系
+        mp_number sumY;
+        mp_mod_add(&sumY, &S2, &p->Y);  // sumY = S2 + Y1
+        if (mp_cmp(&S2, &p->Y) == 0) {
+            // S2 == Y1，则 Q = P，执行点加倍
+            jacobian_double(r, p);
+        } else if (mp_is_zero(&sumY)) {
+            // S2 == -Y1，则 Q = -P，结果为无穷远点
+            jacobian_set_infinity(r);
+        } else {
+            // 理论上不会发生，置为无穷远点
+            jacobian_set_infinity(r);
+        }
+        return;
+    }
+    
+    // HH = H^2
+    mp_mod_mul(&HH, &H, &H);
+    // I = 4*HH
+    mp_mod_add(&t1, &HH, &HH);
+    mp_mod_add(&I, &t1, &t1);
     // J = H*I
     mp_mod_mul(&J, &H, &I);
     // V = X1*I
     mp_mod_mul(&V, &p->X, &I);
     
-    // X3 = (2*(S2-Y1))^2 - J - 2*V
+    // t1 = 2*(S2-Y1)
     mp_mod_sub(&t1, &S2, &p->Y);
-    mp_mod_add(&t2, &t1, &t1);       // t2 = 2*(S2-Y1)
-    mp_mod_mul(&t1, &t2, &t2);       // t1 = (2*(S2-Y1))^2
-    mp_mod_sub(&t2, &t1, &J);        // t2 = (2*(S2-Y1))^2 - J
-    mp_mod_sub(&t1, &t2, &V);        // t1 = (2*(S2-Y1))^2 - J - V
-    mp_mod_sub(&r->X, &t1, &V);      // X3 = (2*(S2-Y1))^2 - J - 2*V
+    mp_mod_add(&t2, &t1, &t1);
     
-    // Y3 = (2*(S2-Y1))*(V-X3) - 2*Y1*J
-    mp_mod_sub(&t1, &V, &r->X);      // t1 = V - X3
-    mp_mod_sub(&t2, &S2, &p->Y);
-    mp_mod_add(&t2, &t2, &t2);       // t2 = 2*(S2-Y1)
-    mp_mod_mul(&V, &t2, &t1);        // V = 2*(S2-Y1)*(V-X3) (重用 V)
+    // X3 = t2^2 - J - 2*V
+    mp_mod_mul(&t1, &t2, &t2);
+    mp_mod_sub(&t1, &t1, &J);
+    mp_mod_sub(&t1, &t1, &V);
+    mp_mod_sub(&r->X, &t1, &V);
     
+    // Y3 = t2*(V-X3) - 2*Y1*J
+    mp_mod_sub(&t1, &V, &r->X);
+    mp_mod_mul(&V, &t2, &t1);
     mp_mod_mul(&t1, &p->Y, &J);
-    mp_mod_add(&t2, &t1, &t1);       // t2 = 2*Y1*J
-    mp_mod_sub(&r->Y, &V, &t2);      // Y3 = 2*(S2-Y1)*(V-X3) - 2*Y1*J
+    mp_mod_add(&t2, &t1, &t1);
+    mp_mod_sub(&r->Y, &V, &t2);
     
-    // Z3 = ((Z1+H)^2 - Z1Z1 - I)
-    mp_mod_add(&t1, &p->Z, &H);      // t1 = Z1 + H
-    mp_mod_mul(&t2, &t1, &t1);       // t2 = (Z1+H)^2
-    mp_mod_sub(&t1, &t2, &Z1Z1);     // t1 = (Z1+H)^2 - Z1Z1
-    mp_mod_sub(&r->Z, &t1, &I);      // Z3 = (Z1+H)^2 - Z1Z1 - I
-}
-
-// 辅助函数：比较两个 mp_number
-int mp_cmp(const mp_number* a, const mp_number* b) {
-    for (int i = 7; i >= 0; i--) {
-        if (a->d[i] < b->d[i]) return -1;
-        if (a->d[i] > b->d[i]) return 1;
-    }
-    return 0;
+    // Z3 = (Z1+H)^2 - Z1Z1 - HH
+    mp_mod_add(&t1, &p->Z, &H);
+    mp_mod_mul(&t2, &t1, &t1);
+    mp_mod_sub(&t1, &t2, &Z1Z1);
+    mp_mod_sub(&r->Z, &t1, &HH);
 }
 
 // Jacobian 转仿射坐标
@@ -655,9 +677,79 @@ void scalar_mult_base(const uchar scalar[32], uchar result[65]) {
     mp_to_bytes(&ry, result + 33);
 }
 
+// 使用 Jacobian 射影坐标的标量乘法: result = scalar * G
+// 性能优化：避免每次迭代都进行模逆运算
+void scalar_mult_base_jacobian(const uchar scalar[32], uchar result[65]) {
+    // 如果私钥为零，返回无穷远点
+    mp_number priv_key;
+    mp_from_bytes(scalar, &priv_key);
+    if (mp_is_zero(&priv_key)) {
+        result[0] = 0x04;
+        for (int i = 1; i < 65; i++) result[i] = 0;
+        return;
+    }
+    
+    // 基点 G 的仿射坐标
+    point g_affine;
+    g_affine.x = Gx;
+    g_affine.y = Gy;
+    
+    // 结果初始化为无穷远点（Jacobian 坐标）
+    jacobian_point r;
+    jacobian_set_infinity(&r);
+    
+    // 从最高位到最低位处理
+    for (int i = 0; i < 32; i++) {
+        uchar byte = scalar[i];
+        for (int j = 7; j >= 0; j--) {
+            // 点加倍: r = 2*r (使用 Jacobian 坐标)
+            if (!jacobian_is_infinity(&r)) {
+                jacobian_double(&r, &r);
+            }
+            
+            // 如果当前位为 1，加上 G
+            if ((byte >> j) & 1) {
+                if (jacobian_is_infinity(&r)) {
+                    // r 是无穷远点，直接设为 G
+                    affine_to_jacobian(&r, &g_affine);
+                } else {
+                    // r = r + G (混合加法)
+                    jacobian_add_affine(&r, &r, &g_affine);
+                }
+            }
+        }
+    }
+    
+    // 转换回仿射坐标
+    point result_affine;
+    jacobian_to_affine(&result_affine, &r);
+    
+    // 输出未压缩公钥格式: 0x04 + x(32字节) + y(32字节)
+    result[0] = 0x04;
+    mp_to_bytes(&result_affine.x, result + 1);
+    mp_to_bytes(&result_affine.y, result + 33);
+}
+
 // 从私钥生成公钥
 void private_to_public(const uchar private_key[32], uchar public_key[65]) {
-    scalar_mult_base(private_key, public_key);
+    scalar_mult_base_jacobian(private_key, public_key);
+}
+
+// 测试函数：比较两种标量乘法的结果
+// 返回 0 如果结果相同，1 如果不同
+int test_scalar_mult_comparison(const uchar scalar[32]) {
+    uchar result_affine[65];
+    uchar result_jacobian[65];
+    
+    scalar_mult_base(scalar, result_affine);
+    scalar_mult_base_jacobian(scalar, result_jacobian);
+    
+    for (int i = 0; i < 65; i++) {
+        if (result_affine[i] != result_jacobian[i]) {
+            return 1;  // 不同
+        }
+    }
+    return 0;  // 相同
 }
 
 #endif // SECP256K1_CL
