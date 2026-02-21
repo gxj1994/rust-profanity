@@ -1,6 +1,6 @@
 //! secp256k1 椭圆曲线运算测试
 
-use secp256k1::{Secp256k1, SecretKey, PublicKey};
+use secp256k1::{PublicKey, Secp256k1, SecretKey};
 
 #[cfg(test)]
 mod tests {
@@ -30,13 +30,11 @@ mod tests {
     fn test_known_private_keys() {
         let secp = Secp256k1::new();
 
-        let test_cases = vec![
-            (
-                "0000000000000000000000000000000000000000000000000000000000000001",
-                "0479be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798\
-                 483ada7726a3c4655da4fbfc0e1108a8fd17b448a68554199c47d08ffb10d4b8"
-            ),
-        ];
+        let test_cases = vec![(
+            "0000000000000000000000000000000000000000000000000000000000000001",
+            "0479be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798\
+                 483ada7726a3c4655da4fbfc0e1108a8fd17b448a68554199c47d08ffb10d4b8",
+        )];
 
         for (priv_hex, expected_pub_hex) in test_cases {
             let priv_bytes = hex::decode(priv_hex).unwrap();
@@ -84,9 +82,9 @@ mod tests {
     fn test_public_key_formats() {
         let secp = Secp256k1::new();
 
-        let priv_bytes = hex::decode(
-            "0000000000000000000000000000000000000000000000000000000000000001"
-        ).unwrap();
+        let priv_bytes =
+            hex::decode("0000000000000000000000000000000000000000000000000000000000000001")
+                .unwrap();
         let secret_key = SecretKey::from_slice(&priv_bytes).unwrap();
         let public_key = PublicKey::from_secret_key(&secp, &secret_key);
 
@@ -101,13 +99,13 @@ mod tests {
 
     #[test]
     fn test_ethereum_address_generation() {
-        use sha3::{Keccak256, Digest};
+        use sha3::{Digest, Keccak256};
 
         let secp = Secp256k1::new();
 
-        let priv_bytes = hex::decode(
-            "0000000000000000000000000000000000000000000000000000000000000001"
-        ).unwrap();
+        let priv_bytes =
+            hex::decode("0000000000000000000000000000000000000000000000000000000000000001")
+                .unwrap();
         let secret_key = SecretKey::from_slice(&priv_bytes).unwrap();
         let public_key = PublicKey::from_secret_key(&secp, &secret_key);
 
@@ -132,7 +130,11 @@ mod tests {
         let mut carry = 0u64;
         for i in 0..4 {
             let s = a[i] + b[i] + carry;
-            carry = if s < a[i] || (s == a[i] && carry > 0) { 1 } else { 0 };
+            carry = if s < a[i] || (s == a[i] && carry > 0) {
+                1
+            } else {
+                0
+            };
             sum[i] = s;
         }
 
@@ -157,7 +159,8 @@ mod tests {
         match ProQue::builder()
             .src("__kernel void test() {}")
             .dims(1)
-            .build() {
+            .build()
+        {
             Ok(_) => println!("OpenCL 可用"),
             Err(e) => println!("OpenCL 不可用: {}", e),
         }

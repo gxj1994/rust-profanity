@@ -1,18 +1,18 @@
 //! OpenCL 内核测试模块
-//! 
+//!
 //! 本模块包含对 GPU 以太坊靓号地址搜索系统 OpenCL 内核的测试。
 //! 测试验证 OpenCL 实现与 Rust 标准实现的一致性。
 
-pub mod test_keccak;
-pub mod test_bip39;
 pub mod test_bip32;
-pub mod test_secp256k1;
+pub mod test_bip39;
 pub mod test_condition;
+pub mod test_keccak;
+pub mod test_secp256k1;
 
 /// 测试工具函数
 pub mod utils {
     use ocl::ProQue;
-    
+
     /// 检查 OpenCL 是否可用
     pub fn is_opencl_available() -> bool {
         ProQue::builder()
@@ -21,23 +21,21 @@ pub mod utils {
             .build()
             .is_ok()
     }
-    
+
     /// 获取 OpenCL 设备信息
     pub fn get_device_info() -> Option<String> {
         match ocl::Platform::list().first() {
-            Some(platform) => {
-                match ocl::Device::list_all(platform) {
-                    Ok(devices) if !devices.is_empty() => {
-                        let device = &devices[0];
-                        Some(format!(
-                            "Platform: {}, Device: {}",
-                            platform.name().unwrap_or_default(),
-                            device.name().unwrap_or_default()
-                        ))
-                    }
-                    _ => None,
+            Some(platform) => match ocl::Device::list_all(platform) {
+                Ok(devices) if !devices.is_empty() => {
+                    let device = &devices[0];
+                    Some(format!(
+                        "Platform: {}, Device: {}",
+                        platform.name().unwrap_or_default(),
+                        device.name().unwrap_or_default()
+                    ))
                 }
-            }
+                _ => None,
+            },
             None => None,
         }
     }
@@ -46,7 +44,7 @@ pub mod utils {
 #[cfg(test)]
 mod integration_tests {
     use super::utils;
-    
+
     /// 测试 OpenCL 环境
     #[test]
     fn test_opencl_environment() {
@@ -57,7 +55,7 @@ mod integration_tests {
             println!("警告: 未检测到 OpenCL 设备");
         }
     }
-    
+
     /// 打印测试配置
     #[test]
     fn print_test_configuration() {
@@ -68,7 +66,7 @@ mod integration_tests {
         println!("  - test_bip32: BIP32 密钥派生测试");
         println!("  - test_secp256k1: secp256k1 椭圆曲线测试");
         println!("  - test_condition: 条件匹配测试");
-        
+
         if let Some(info) = utils::get_device_info() {
             println!("\nOpenCL 设备: {}", info);
         } else {

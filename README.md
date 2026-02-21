@@ -52,6 +52,33 @@ cargo test
 
 ## 使用方法
 
+### Rust 代码调用（库接口）
+
+```rust
+use std::time::Duration;
+use rust_profanity::{search, SearchCondition, SearchRequest, SourceMode};
+
+fn main() -> anyhow::Result<()> {
+    let mut req = SearchRequest::new(SearchCondition::Prefix("00".to_string()));
+    req.threads = 1024;
+    req.timeout = Some(Duration::from_secs(60));
+    req.source_mode = SourceMode::PrivateKey;
+    req.multi_gpu = true;
+
+    let resp = search(req)?;
+    if resp.found {
+        println!("address: 0x{}", resp.eth_address_hex().unwrap());
+        println!("seed: 0x{}", resp.result_seed_hex().unwrap());
+    } else if resp.timed_out {
+        println!("search timeout");
+    } else {
+        println!("not found");
+    }
+
+    Ok(())
+}
+```
+
 ### 前缀匹配
 
 搜索以 `00` 开头的以太坊地址：

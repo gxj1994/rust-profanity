@@ -162,7 +162,7 @@ mod tests {
 #[cfg(test)]
 mod opencl_tests {
     use super::*;
-    use ocl::{ProQue, Buffer, MemFlags};
+    use ocl::{Buffer, MemFlags, ProQue};
 
     fn load_kernel_source() -> String {
         include_str!("../kernels/utils/condition.cl").to_string()
@@ -171,10 +171,7 @@ mod opencl_tests {
     fn opencl_check_condition(address: &[u8; 20], condition: u64) -> ocl::Result<bool> {
         let kernel_source = load_kernel_source();
 
-        let proque = ProQue::builder()
-            .src(kernel_source)
-            .dims(1)
-            .build()?;
+        let proque = ProQue::builder().src(kernel_source).dims(1).build()?;
 
         let address_buffer = Buffer::<u8>::builder()
             .queue(proque.queue().clone())
@@ -189,7 +186,8 @@ mod opencl_tests {
             .len(1)
             .build()?;
 
-        let kernel = proque.kernel_builder("check_condition")
+        let kernel = proque
+            .kernel_builder("check_condition")
             .arg(&address_buffer)
             .arg(condition)
             .arg(&result_buffer)

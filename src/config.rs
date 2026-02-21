@@ -23,13 +23,13 @@ impl Default for PatternConfig {
 }
 
 /// 搜索任务配置 (传递给 GPU)
-/// 
+///
 /// 注意：必须与 OpenCL 的 search_config_t 结构体完全匹配
 /// OpenCL 布局: base_seed[32] @0, num_threads @32, source_mode @36, target_chain @40,
 ///              _padding1[4] @44, condition @48, check_interval @56, _padding2[4] @60,
 ///              pattern_mask[20] @64, pattern_value[20] @84
 /// 总大小: 104 bytes
-/// 
+///
 /// 使用 `#[repr(C, align(8))]` 确保 8 字节对齐，与 OpenCL 端保持一致
 #[repr(C, align(8))]
 #[derive(Debug, Clone, Copy)]
@@ -67,7 +67,7 @@ impl SearchConfig {
             target_chain: TargetChain::Ethereum as u32,
             _padding1: [0; 4],
             condition,
-            check_interval: 2048,   // 每2048次迭代检查一次，降低原子写入频率
+            check_interval: 2048, // 每2048次迭代检查一次，降低原子写入频率
             _padding2: [0; 4],
             pattern_config: PatternConfig::default(),
         }
@@ -192,7 +192,7 @@ impl ConditionType {
     pub fn encode(self, param: u64) -> u64 {
         ((self as u64) << 48) | (param & 0xFFFFFFFFFFFF)
     }
-    
+
     /// 编码前缀/后缀条件，将字节数打包进 condition
     /// 格式: [类型:16位][字节数:8位][参数:40位]
     /// 参数最多40位(5字节)，足够存储6字节的前缀/后缀(因为十六进制字符串最多12字符=6字节)
@@ -206,7 +206,7 @@ impl ConditionType {
 }
 
 /// 解析十六进制字符串为字节，并编码为条件参数
-/// 
+///
 /// 公共辅助函数，用于前缀和后缀条件的解析
 fn parse_hex_to_condition(
     input: &str,
@@ -235,7 +235,11 @@ fn parse_hex_to_condition(
     let bytes = hex::decode(&hex_str)?;
 
     if bytes.len() > max_bytes {
-        anyhow::bail!("Input too long, max {} hex characters ({} bytes)", max_bytes * 2, max_bytes);
+        anyhow::bail!(
+            "Input too long, max {} hex characters ({} bytes)",
+            max_bytes * 2,
+            max_bytes
+        );
     }
 
     // 将字节编码为 u64 参数 (大端序)
@@ -278,13 +282,13 @@ pub fn parse_leading_zeros_condition(zeros: u32) -> anyhow::Result<u64> {
 }
 
 /// 解析模式匹配条件
-/// 
+///
 /// 支持类似 profanity 的模式匹配格式:
 /// - `0xXXXXXXXXXXXXabcdXXXXXXXXXXXXXXXXXXXXXXXX` - X 表示通配符，其他字符表示需要匹配的值
 /// - `0x0000XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX` - 前缀匹配
 /// - `0xXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXdead` - 后缀匹配
 /// - `0xXXXX1234XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX` - 中间匹配
-/// 
+///
 /// # Example
 /// ```
 /// use rust_profanity::config::parse_pattern_condition;
@@ -297,20 +301,23 @@ pub fn parse_pattern_condition(pattern: &str) -> anyhow::Result<(u64, PatternCon
     } else {
         pattern
     };
-    
+
     // 验证长度 (必须是40个十六进制字符 = 20字节)
     if hex_str.len() != 40 {
-        anyhow::bail!("Pattern must be exactly 40 hex characters (20 bytes), got {}", hex_str.len());
+        anyhow::bail!(
+            "Pattern must be exactly 40 hex characters (20 bytes), got {}",
+            hex_str.len()
+        );
     }
-    
+
     let mut mask = [0u8; 20];
     let mut value = [0u8; 20];
-    
+
     // 解析每个字符
     for (i, c) in hex_str.chars().enumerate() {
         let byte_idx = i / 2;
         let is_high_nibble = i % 2 == 0;
-        
+
         match c {
             'X' | 'x' | '*' | '?' => {
                 // 通配符: 不需要匹配这个半字节
@@ -319,7 +326,7 @@ pub fn parse_pattern_condition(pattern: &str) -> anyhow::Result<(u64, PatternCon
             '0'..='9' | 'a'..='f' | 'A'..='F' => {
                 // 需要匹配的十六进制字符
                 let nibble = c.to_digit(16).unwrap() as u8;
-                
+
                 if is_high_nibble {
                     // 高半字节 (位7-4)
                     mask[byte_idx] |= 0xF0;
@@ -331,14 +338,17 @@ pub fn parse_pattern_condition(pattern: &str) -> anyhow::Result<(u64, PatternCon
                 }
             }
             _ => {
-                anyhow::bail!("Invalid character '{}' in pattern. Use hex digits (0-9, a-f) or X/*/? for wildcards", c);
+                anyhow::bail!(
+                    "Invalid character '{}' in pattern. Use hex digits (0-9, a-f) or X/*/? for wildcards",
+                    c
+                );
             }
         }
     }
-    
+
     let pattern_config = PatternConfig { mask, value };
     let condition = ConditionType::Pattern.encode(0); // Pattern 类型不需要额外参数
-    
+
     Ok((condition, pattern_config))
 }
 
@@ -389,17 +399,16 @@ mod tests {
     #[test]
     fn test_parse_pattern_suffix_dead() {
         // 测试后缀匹配: 0xXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXdead
-        let (_condition, pattern_config) = parse_pattern_condition(
-            "0xXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXdead"
-        ).unwrap();
-        
+        let (_condition, pattern_config) =
+            parse_pattern_condition("0xXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXdead").unwrap();
+
         // 验证最后两个字节的掩码和值
         // "dead" = [0xde, 0xad]
-        assert_eq!(pattern_config.mask[18], 0xFF);  // 第19字节需要完全匹配
-        assert_eq!(pattern_config.mask[19], 0xFF);  // 第20字节需要完全匹配
+        assert_eq!(pattern_config.mask[18], 0xFF); // 第19字节需要完全匹配
+        assert_eq!(pattern_config.mask[19], 0xFF); // 第20字节需要完全匹配
         assert_eq!(pattern_config.value[18], 0xde);
         assert_eq!(pattern_config.value[19], 0xad);
-        
+
         // 验证前面的字节掩码为0 (通配符)
         for i in 0..18 {
             assert_eq!(pattern_config.mask[i], 0, "字节 {} 应该是通配符", i);
@@ -409,16 +418,15 @@ mod tests {
     #[test]
     fn test_parse_pattern_prefix_0000() {
         // 测试前缀匹配: 0x0000XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
-        let (_condition, pattern_config) = parse_pattern_condition(
-            "0x0000XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
-        ).unwrap();
-        
+        let (_condition, pattern_config) =
+            parse_pattern_condition("0x0000XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX").unwrap();
+
         // "0000" = [0x00, 0x00]
         assert_eq!(pattern_config.mask[0], 0xFF);
         assert_eq!(pattern_config.mask[1], 0xFF);
         assert_eq!(pattern_config.value[0], 0x00);
         assert_eq!(pattern_config.value[1], 0x00);
-        
+
         // 验证后面的字节掩码为0
         for i in 2..20 {
             assert_eq!(pattern_config.mask[i], 0, "字节 {} 应该是通配符", i);
@@ -429,16 +437,15 @@ mod tests {
     fn test_parse_pattern_middle_abcd() {
         // 测试中间匹配: 0xXXXXXXXXXXXXabcdXXXXXXXXXXXXXXXXXXXXXXXX
         // "abcd" 在第7-8字节位置 (索引6-7)
-        let (_condition, pattern_config) = parse_pattern_condition(
-            "0xXXXXXXXXXXXXabcdXXXXXXXXXXXXXXXXXXXXXXXX"
-        ).unwrap();
-        
+        let (_condition, pattern_config) =
+            parse_pattern_condition("0xXXXXXXXXXXXXabcdXXXXXXXXXXXXXXXXXXXXXXXX").unwrap();
+
         // "abcd" = [0xab, 0xcd] 在位置 6-7
         assert_eq!(pattern_config.mask[6], 0xFF);
         assert_eq!(pattern_config.mask[7], 0xFF);
         assert_eq!(pattern_config.value[6], 0xab);
         assert_eq!(pattern_config.value[7], 0xcd);
-        
+
         // 其他字节应该是通配符
         assert_eq!(pattern_config.mask[0], 0);
         assert_eq!(pattern_config.mask[19], 0);
@@ -447,24 +454,23 @@ mod tests {
     #[test]
     fn test_parse_pattern_mixed() {
         // 测试混合模式: 0x00XX11XX22XXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
-        let (_condition, pattern_config) = parse_pattern_condition(
-            "0x00XX11XX22XXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
-        ).unwrap();
-        
+        let (_condition, pattern_config) =
+            parse_pattern_condition("0x00XX11XX22XXXXXXXXXXXXXXXXXXXXXXXXXXXXXX").unwrap();
+
         // 第0字节: 00 (完全匹配)
         assert_eq!(pattern_config.mask[0], 0xFF);
         assert_eq!(pattern_config.value[0], 0x00);
-        
+
         // 第1字节: XX (通配符)
         assert_eq!(pattern_config.mask[1], 0x00);
-        
+
         // 第2字节: 11 (完全匹配)
         assert_eq!(pattern_config.mask[2], 0xFF);
         assert_eq!(pattern_config.value[2], 0x11);
-        
+
         // 第3字节: XX (通配符)
         assert_eq!(pattern_config.mask[3], 0x00);
-        
+
         // 第4字节: 22 (完全匹配)
         assert_eq!(pattern_config.mask[4], 0xFF);
         assert_eq!(pattern_config.value[4], 0x22);
@@ -475,7 +481,12 @@ mod tests {
         // 测试无效长度
         let result = parse_pattern_condition("0x1234");
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("40 hex characters"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("40 hex characters")
+        );
     }
 
     #[test]
@@ -490,14 +501,13 @@ mod tests {
     #[test]
     fn test_parse_pattern_wildcard_variants() {
         // 测试不同的通配符: X, x, *, ?
-        let (_condition, pattern_config) = parse_pattern_condition(
-            "0xXx*?1234XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
-        ).unwrap();
-        
+        let (_condition, pattern_config) =
+            parse_pattern_condition("0xXx*?1234XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX").unwrap();
+
         // 前4个字符是通配符
         assert_eq!(pattern_config.mask[0], 0x00);
         assert_eq!(pattern_config.mask[1], 0x00);
-        
+
         // "1234" = [0x12, 0x34] 在位置 2-3
         assert_eq!(pattern_config.mask[2], 0xFF);
         assert_eq!(pattern_config.value[2], 0x12);

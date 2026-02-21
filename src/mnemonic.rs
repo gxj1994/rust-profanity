@@ -1,7 +1,7 @@
 //! BIP39 助记词生成与管理 (简化版)
 
-use rand::rngs::OsRng;
 use rand::RngCore;
+use rand::rngs::OsRng;
 use sha2::{Digest, Sha256};
 
 // 引入完整的 BIP39 单词表
@@ -19,10 +19,10 @@ impl Mnemonic {
     pub fn generate_random() -> anyhow::Result<Self> {
         let mut entropy = [0u8; 32];
         OsRng.fill_bytes(&mut entropy);
-        
+
         Self::from_entropy(&entropy)
     }
-    
+
     /// 从熵生成助记词 (符合 BIP39 标准)
     pub fn from_entropy(entropy: &[u8; 32]) -> anyhow::Result<Self> {
         // 计算校验和: SHA256 的前 8 位 (256/32 = 8)
@@ -80,32 +80,26 @@ impl Mnemonic {
             }
         }
     }
-    
+
     /// 转换为 BIP39 种子
-    /// 
+    ///
     /// # Panics
     /// 如果助记词包含无效的单词索引，会 panic
     pub fn to_seed(&self, passphrase: &str) -> [u8; 64] {
-        let mnemonic_str = self.as_phrase()
-            .expect("Invalid mnemonic word index");
+        let mnemonic_str = self.as_phrase().expect("Invalid mnemonic word index");
         let salt = format!("mnemonic{}", passphrase);
-        
+
         use pbkdf2::pbkdf2_hmac;
         use sha2::Sha512;
-        
+
         let mut seed = [0u8; 64];
-        pbkdf2_hmac::<Sha512>(
-            mnemonic_str.as_bytes(),
-            salt.as_bytes(),
-            2048,
-            &mut seed,
-        );
-        
+        pbkdf2_hmac::<Sha512>(mnemonic_str.as_bytes(), salt.as_bytes(), 2048, &mut seed);
+
         seed
     }
-    
+
     /// 转换为字符串
-    /// 
+    ///
     /// # Errors
     /// 如果单词索引超出有效范围 (0-2047)，返回错误
     pub fn as_phrase(&self) -> anyhow::Result<String> {
@@ -114,21 +108,25 @@ impl Mnemonic {
             if (idx as usize) < BIP39_WORDLIST.len() {
                 words.push(BIP39_WORDLIST[idx as usize]);
             } else {
-                anyhow::bail!("Invalid word index {} at position {} (max: {})", 
-                    idx, i, BIP39_WORDLIST.len() - 1);
+                anyhow::bail!(
+                    "Invalid word index {} at position {} (max: {})",
+                    idx,
+                    i,
+                    BIP39_WORDLIST.len() - 1
+                );
             }
         }
         Ok(words.join(" "))
     }
-    
+
     /// 从字符串解析
     pub fn from_string(s: &str) -> anyhow::Result<Self> {
         let word_strs: Vec<&str> = s.split_whitespace().collect();
-        
+
         if word_strs.len() != 24 {
             anyhow::bail!("Expected 24 words, got {}", word_strs.len());
         }
-        
+
         let mut words = [0u16; 24];
         for (i, word) in word_strs.iter().enumerate() {
             match BIP39_WORDLIST.iter().position(|&w| w == *word) {
@@ -136,10 +134,10 @@ impl Mnemonic {
                 None => anyhow::bail!("Unknown word: {}", word),
             }
         }
-        
+
         Ok(Self { words })
     }
-    
+
     /// 从单词索引重建位流
     fn rebuild_bitstream(&self) -> [u8; 33] {
         let mut all_bits = [0u8; 33];
@@ -201,13 +199,16 @@ mod tests {
     fn test_mnemonic_generation() {
         let mnemonic = Mnemonic::generate_random().unwrap();
         assert_eq!(mnemonic.words.len(), 24);
-        
+
         for &word in &mnemonic.words {
             assert!(word < 2048);
         }
-        
+
         // 验证生成的助记词校验和正确
-        assert!(mnemonic.validate_checksum(), "Generated mnemonic has invalid checksum");
+        assert!(
+            mnemonic.validate_checksum(),
+            "Generated mnemonic has invalid checksum"
+        );
     }
 
     #[test]
@@ -216,7 +217,7 @@ mod tests {
         let seed = mnemonic.to_seed("");
         assert_eq!(seed.len(), 64);
     }
-    
+
     /// 测试 BIP39 标准测试向量
     /// 来自: https://github.com/trezor/python-mnemonic/blob/master/vectors.json
     #[test]
@@ -227,30 +228,35 @@ mod tests {
         let phrase1 = mnemonic1.to_string();
         println!("Vector 1 mnemonic: {}", phrase1);
         assert!(mnemonic1.validate_checksum(), "Vector 1 checksum failed");
-        
+
         // 验证前几个单词是 "abandon"
-        assert_eq!(mnemonic1.words[0], 0, "First word should be 'abandon' (index 0)");
-        assert_eq!(mnemonic1.words[1], 0, "Second word should be 'abandon' (index 0)");
-        
+        assert_eq!(
+            mnemonic1.words[0], 0,
+            "First word should be 'abandon' (index 0)"
+        );
+        assert_eq!(
+            mnemonic1.words[1], 0,
+            "Second word should be 'abandon' (index 0)"
+        );
+
         // 测试向量 2: 特定熵
         let entropy2: [u8; 32] = [
-            0x7f, 0x7f, 0x7f, 0x7f, 0x7f, 0x7f, 0x7f, 0x7f,
-            0x7f, 0x7f, 0x7f, 0x7f, 0x7f, 0x7f, 0x7f, 0x7f,
-            0x7f, 0x7f, 0x7f, 0x7f, 0x7f, 0x7f, 0x7f, 0x7f,
-            0x7f, 0x7f, 0x7f, 0x7f, 0x7f, 0x7f, 0x7f, 0x7f,
+            0x7f, 0x7f, 0x7f, 0x7f, 0x7f, 0x7f, 0x7f, 0x7f, 0x7f, 0x7f, 0x7f, 0x7f, 0x7f, 0x7f,
+            0x7f, 0x7f, 0x7f, 0x7f, 0x7f, 0x7f, 0x7f, 0x7f, 0x7f, 0x7f, 0x7f, 0x7f, 0x7f, 0x7f,
+            0x7f, 0x7f, 0x7f, 0x7f,
         ];
         let mnemonic2 = Mnemonic::from_entropy(&entropy2).unwrap();
         println!("Vector 2 mnemonic: {}", mnemonic2);
         assert!(mnemonic2.validate_checksum(), "Vector 2 checksum failed");
     }
-    
+
     #[test]
     fn test_roundtrip() {
         // 生成 -> 字符串 -> 解析 -> 验证
         let original = Mnemonic::generate_random().unwrap();
         let phrase = original.to_string();
         let parsed = Mnemonic::from_string(&phrase).unwrap();
-        
+
         assert_eq!(original.words, parsed.words);
         assert!(parsed.validate_checksum());
     }

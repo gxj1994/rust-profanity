@@ -171,8 +171,7 @@ mod tests {
 
     #[test]
     fn test_load_unknown_stage() {
-        let result = load_kernel_stages(&["unknown_stage"])
-            .map_err(|e| e.to_string());
+        let result = load_kernel_stages(&["unknown_stage"]).map_err(|e| e.to_string());
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Unknown kernel stage"));
     }
