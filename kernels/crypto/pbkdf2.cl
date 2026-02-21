@@ -6,7 +6,8 @@
 // 注意：此头文件需要 sha512.cl
 // PBKDF2-HMAC-SHA512 实现 (BIP39 标准)
 
-// 单次 PBKDF2 块计算
+// 单次 PBKDF2 块计算 - 使用预计算优化
+// 优化点：预计算 ipad/opad 的中间哈希状态，每次迭代只需2次压缩而非4次
 void pbkdf2_hmac_sha512_block(
     const uchar* password, uint password_len,
     const uchar* salt, uint salt_len,
@@ -14,6 +15,10 @@ void pbkdf2_hmac_sha512_block(
     uint block_num,
     uchar output[64]
 ) {
+    // 预计算 HMAC-SHA512 的 ipad/opad 状态（密钥不变，只需计算一次）
+    hmac_sha512_precomputed_t pre;
+    hmac_sha512_precompute(password, password_len, &pre);
+    
     // U_1 = HMAC-SHA512(Password, Salt || INT_32_BE(block_num))
     // 使用固定大小数组，避免大数组初始化开销
     uchar salt_block[128];  // BIP39 salt "mnemonic" (8字节) + 4 = 12 < 128
@@ -29,7 +34,8 @@ void pbkdf2_hmac_sha512_block(
     salt_block[salt_len + 3] = (uchar)block_num;
     
     uchar u[64];
-    hmac_sha512(password, password_len, salt_block, salt_len + 4, u);
+    // 使用预计算状态计算 HMAC，每次调用只需2次压缩
+    hmac_sha512_from_precompute(&pre, salt_block, salt_len + 4, u);
     
     // T = U_1 (使用 uchar16 向量类型批量复制 64 字节)
     uchar16* out16 = (uchar16*)output;
@@ -41,8 +47,8 @@ void pbkdf2_hmac_sha512_block(
     
     // U_2 到 U_iterations
     for (uint iter = 1; iter < iterations; iter++) {
-        // 直接使用 u 作为输入和输出，避免 prev_u 拷贝
-        hmac_sha512(password, password_len, u, 64, u);
+        // 使用预计算状态，每次迭代只需2次压缩（而非原来的4次）
+        hmac_sha512_from_precompute(&pre, u, 64, u);
         
         // T ^= U_i (使用 uchar16 向量类型批量异或)
         out16[0] ^= u16[0];

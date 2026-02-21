@@ -245,7 +245,184 @@ void sha512(const uchar* data, uint len, uchar hash[64]) {
     }
 }
 
-// HMAC-SHA512
+// HMAC-SHA512 预计算结构体
+typedef struct {
+    ulong state_ipad[8];  // 压缩ipad后的状态
+    ulong state_opad[8];  // 压缩opad后的状态
+} hmac_sha512_precomputed_t;
+
+// 预计算 HMAC-SHA512 的 ipad/opad 状态
+// 由于密钥在PBKDF2过程中不变，可以预先计算这两个状态，避免每次迭代重复计算
+void hmac_sha512_precompute(const uchar* key, uint key_len, hmac_sha512_precomputed_t* pre) {
+    uchar key_buf[128];
+    
+    // 初始化数组
+    for (uint i = 0; i < 128; i++) {
+        key_buf[i] = 0;
+    }
+    
+    // 如果密钥太长，先哈希
+    uint actual_key_len = key_len;
+    if (key_len > 128) {
+        uchar hash_result[64];
+        sha512(key, key_len, hash_result);
+        for (uint i = 0; i < 64; i++) {
+            key_buf[i] = hash_result[i];
+        }
+        actual_key_len = 64;
+    } else {
+        for (uint i = 0; i < key_len; i++) {
+            key_buf[i] = key[i];
+        }
+    }
+    
+    // 准备 ipad 和 opad 块
+    uchar ipad[128];
+    uchar opad[128];
+    for (uint i = 0; i < 128; i++) {
+        ipad[i] = key_buf[i] ^ 0x36;
+        opad[i] = key_buf[i] ^ 0x5C;
+    }
+    
+    // 计算 state_ipad: 从初始状态压缩ipad块
+    for (uint i = 0; i < 8; i++) {
+        pre->state_ipad[i] = SHA512_H[i];
+    }
+    sha512_compress(pre->state_ipad, ipad);
+    
+    // 计算 state_opad: 从初始状态压缩opad块
+    for (uint i = 0; i < 8; i++) {
+        pre->state_opad[i] = SHA512_H[i];
+    }
+    sha512_compress(pre->state_opad, opad);
+}
+
+// 使用预计算状态计算 HMAC-SHA512
+// 每次迭代只需2次压缩（处理data/inner_hash），而非原来的4次
+void hmac_sha512_from_precompute(const hmac_sha512_precomputed_t* pre, const uchar* data, uint data_len, uchar result[64]) {
+    // 内层哈希: 从 state_ipad 开始，压缩 data
+    ulong state[8];
+    for (uint i = 0; i < 8; i++) {
+        state[i] = pre->state_ipad[i];
+    }
+    
+    // 处理 data
+    uint i = 0;
+    while (i + 128 <= data_len) {
+        sha512_compress(state, &data[i]);
+        i += 128;
+    }
+    
+    // 最后一块填充
+    uchar block[128];
+    uint remaining = data_len - i;
+    for (uint j = 0; j < remaining; j++) {
+        block[j] = data[i + j];
+    }
+    block[remaining] = 0x80;
+    
+    // 计算内层哈希总长度: ipad(128字节) + data(data_len字节)
+    ulong inner_bit_len = (128ULL + (ulong)data_len) * 8ULL;
+    
+    if (remaining < 112) {
+        for (uint j = remaining + 1; j < 112; j++) {
+            block[j] = 0;
+        }
+        // 写入128位长度（大端序）- 高64位为0，低64位为bit_len
+        for (uint j = 112; j < 120; j++) {
+            block[j] = 0;
+        }
+        block[120] = (uchar)(inner_bit_len >> 56);
+        block[121] = (uchar)(inner_bit_len >> 48);
+        block[122] = (uchar)(inner_bit_len >> 40);
+        block[123] = (uchar)(inner_bit_len >> 32);
+        block[124] = (uchar)(inner_bit_len >> 24);
+        block[125] = (uchar)(inner_bit_len >> 16);
+        block[126] = (uchar)(inner_bit_len >> 8);
+        block[127] = (uchar)inner_bit_len;
+        sha512_compress(state, block);
+    } else {
+        for (uint j = remaining + 1; j < 128; j++) {
+            block[j] = 0;
+        }
+        sha512_compress(state, block);
+        
+        for (uint j = 0; j < 112; j++) {
+            block[j] = 0;
+        }
+        // 写入128位长度（大端序）- 高64位为0，低64位为bit_len
+        for (uint j = 112; j < 120; j++) {
+            block[j] = 0;
+        }
+        block[120] = (uchar)(inner_bit_len >> 56);
+        block[121] = (uchar)(inner_bit_len >> 48);
+        block[122] = (uchar)(inner_bit_len >> 40);
+        block[123] = (uchar)(inner_bit_len >> 32);
+        block[124] = (uchar)(inner_bit_len >> 24);
+        block[125] = (uchar)(inner_bit_len >> 16);
+        block[126] = (uchar)(inner_bit_len >> 8);
+        block[127] = (uchar)inner_bit_len;
+        sha512_compress(state, block);
+    }
+    
+    // 先保存内层哈希结果（此时 state 包含 inner hash）
+    // 必须在加载 state_opad 之前保存
+    uchar inner_hash[64];
+    for (uint j = 0; j < 8; j++) {
+        inner_hash[j * 8] = (uchar)(state[j] >> 56);
+        inner_hash[j * 8 + 1] = (uchar)(state[j] >> 48);
+        inner_hash[j * 8 + 2] = (uchar)(state[j] >> 40);
+        inner_hash[j * 8 + 3] = (uchar)(state[j] >> 32);
+        inner_hash[j * 8 + 4] = (uchar)(state[j] >> 24);
+        inner_hash[j * 8 + 5] = (uchar)(state[j] >> 16);
+        inner_hash[j * 8 + 6] = (uchar)(state[j] >> 8);
+        inner_hash[j * 8 + 7] = (uchar)state[j];
+    }
+    
+    // 外层哈希: 从 state_opad 开始，压缩 inner_hash
+    for (uint j = 0; j < 8; j++) {
+        state[j] = pre->state_opad[j];
+    }
+    
+    // 处理 inner_hash (64字节，需要填充)
+    // 外层哈希总长度: opad(128字节) + inner_hash(64字节) = 192字节
+    ulong outer_bit_len = (128ULL + 64ULL) * 8ULL;
+    
+    for (uint j = 0; j < 64; j++) {
+        block[j] = inner_hash[j];
+    }
+    block[64] = 0x80;
+    for (uint j = 65; j < 112; j++) {
+        block[j] = 0;
+    }
+    // 写入128位长度（大端序）- 高64位为0，低64位为bit_len
+    for (uint j = 112; j < 120; j++) {
+        block[j] = 0;
+    }
+    block[120] = (uchar)(outer_bit_len >> 56);
+    block[121] = (uchar)(outer_bit_len >> 48);
+    block[122] = (uchar)(outer_bit_len >> 40);
+    block[123] = (uchar)(outer_bit_len >> 32);
+    block[124] = (uchar)(outer_bit_len >> 24);
+    block[125] = (uchar)(outer_bit_len >> 16);
+    block[126] = (uchar)(outer_bit_len >> 8);
+    block[127] = (uchar)outer_bit_len;
+    sha512_compress(state, block);
+    
+    // 输出结果
+    for (uint j = 0; j < 8; j++) {
+        result[j * 8] = (uchar)(state[j] >> 56);
+        result[j * 8 + 1] = (uchar)(state[j] >> 48);
+        result[j * 8 + 2] = (uchar)(state[j] >> 40);
+        result[j * 8 + 3] = (uchar)(state[j] >> 32);
+        result[j * 8 + 4] = (uchar)(state[j] >> 24);
+        result[j * 8 + 5] = (uchar)(state[j] >> 16);
+        result[j * 8 + 6] = (uchar)(state[j] >> 8);
+        result[j * 8 + 7] = (uchar)state[j];
+    }
+}
+
+// HMAC-SHA512 (原始实现，保持兼容性)
 void hmac_sha512(const uchar* key, uint key_len, const uchar* data, uint data_len, uchar result[64]) {
     uchar ipad[128];
     uchar opad[128];
