@@ -249,13 +249,35 @@ pub fn search(request: SearchRequest) -> anyhow::Result<SearchResponse> {
 
 fn parse_condition(condition: &SearchCondition) -> anyhow::Result<(u64, Option<PatternConfig>)> {
     match condition {
-        SearchCondition::Prefix(value) => Ok((parse_prefix_condition(value)?, None)),
+        SearchCondition::Prefix(value) => parse_prefix_condition_via_api(value),
         SearchCondition::Suffix(value) => Ok((parse_suffix_condition(value)?, None)),
         SearchCondition::LeadingZeros(value) => Ok((parse_leading_zeros_condition(*value)?, None)),
         SearchCondition::Pattern(value) => {
             let (condition, pattern) = parse_pattern_condition(value)?;
             Ok((condition, Some(pattern)))
         }
+    }
+}
+
+fn parse_prefix_condition_via_api(value: &str) -> anyhow::Result<(u64, Option<PatternConfig>)> {
+    let hex = value
+        .strip_prefix("0x")
+        .or_else(|| value.strip_prefix("0X"))
+        .unwrap_or(value);
+
+    // Prefix path uses byte comparison; odd nibble count is routed to pattern matching.
+    if hex.len() % 2 == 1 {
+        if !hex.chars().all(|c| c.is_ascii_hexdigit()) {
+            anyhow::bail!("Input must contain only hexadecimal characters (0-9, a-f, A-F)");
+        }
+        if hex.len() > 12 {
+            anyhow::bail!("Input too long, max 12 hex characters (6 bytes)");
+        }
+        let pattern_str = format!("0x{}{}", hex, "X".repeat(40 - hex.len()));
+        let (condition, pattern) = parse_pattern_condition(&pattern_str)?;
+        Ok((condition, Some(pattern)))
+    } else {
+        Ok((parse_prefix_condition(value)?, None))
     }
 }
 
@@ -318,5 +340,14 @@ mod tests {
         assert!(pattern.is_none());
         let cond_type = (condition >> 48) & 0xFFFF;
         assert_eq!(cond_type, ConditionType::Prefix as u64);
+    }
+
+    #[test]
+    fn test_parse_odd_prefix_condition_via_api_falls_back_to_pattern() {
+        let (condition, pattern) =
+            parse_condition(&SearchCondition::Prefix(String::from("000"))).unwrap();
+        assert!(pattern.is_some());
+        let cond_type = (condition >> 48) & 0xFFFF;
+        assert_eq!(cond_type, ConditionType::Pattern as u64);
     }
 }

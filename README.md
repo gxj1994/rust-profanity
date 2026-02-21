@@ -109,10 +109,10 @@ fn main() -> anyhow::Result<()> {
 
 ### 前缀匹配
 
-搜索以 `00` 开头的以太坊地址：
+搜索以 `888` 开头的以太坊地址：
 
 ```bash
-./target/release/rust-profanity --prefix 00 --threads 256 --timeout 60
+./target/release/rust-profanity --prefix 888 --threads 256 --timeout 60
 ```
 
 ### 直接私钥模式
