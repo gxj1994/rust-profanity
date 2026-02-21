@@ -84,9 +84,21 @@ pub enum ConditionType {
 }
 
 impl ConditionType {
-    /// 编码条件
+    /// 编码条件 (基础版本，不带字节数)
+    /// 格式: [类型:16位][参数:48位]
     pub fn encode(self, param: u64) -> u64 {
         ((self as u64) << 48) | (param & 0xFFFFFFFFFFFF)
+    }
+    
+    /// 编码前缀/后缀条件，将字节数打包进 condition
+    /// 格式: [类型:16位][字节数:8位][参数:40位]
+    /// 参数最多40位(5字节)，足够存储6字节的前缀/后缀(因为十六进制字符串最多12字符=6字节)
+    /// 但实际上我们存储的是大端序的数值，所以6字节需要48位，这里调整为：
+    /// 格式: [类型:16位][字节数:4位][保留:4位][参数:40位]
+    /// 对于需要6字节的情况，我们特殊处理：字节数=0表示6字节
+    pub fn encode_with_bytes(self, param: u64, bytes: u8) -> u64 {
+        let bytes_field = if bytes >= 6 { 0 } else { bytes };
+        ((self as u64) << 48) | ((bytes_field as u64) << 44) | (param & 0xFFFFFFFFFF)
     }
 }
 
@@ -132,7 +144,9 @@ pub fn parse_prefix_condition(prefix: &str) -> anyhow::Result<u64> {
         param = (param << 8) | (byte as u64);
     }
     
-    Ok(ConditionType::Prefix.encode(param))
+    // 使用新的编码方式，将字节数打包进 condition
+    let bytes_len = bytes.len() as u8;
+    Ok(ConditionType::Prefix.encode_with_bytes(param, bytes_len))
 }
 
 /// 解析后缀条件
@@ -166,7 +180,9 @@ pub fn parse_suffix_condition(suffix: &str) -> anyhow::Result<u64> {
         param = (param << 8) | (byte as u64);
     }
     
-    Ok(ConditionType::Suffix.encode(param))
+    // 使用新的编码方式，将字节数打包进 condition
+    let bytes_len = bytes.len() as u8;
+    Ok(ConditionType::Suffix.encode_with_bytes(param, bytes_len))
 }
 
 /// 解析前导零条件 (至少)

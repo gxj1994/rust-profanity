@@ -4,8 +4,16 @@ const COND_PREFIX: u16 = 0x01;
 const COND_SUFFIX: u16 = 0x02;
 const COND_LEADING: u16 = 0x04;
 
+/// 旧版编码（不带字节数）- 用于前导零条件
 fn encode_condition(cond_type: u16, param: u64) -> u64 {
     ((cond_type as u64) << 48) | (param & 0xFFFFFFFFFFFF)
+}
+
+/// 新版编码（带字节数）- 用于前缀/后缀条件
+/// 格式: [类型:16位][字节数:4位][保留:4位][参数:40位]
+fn encode_condition_with_bytes(cond_type: u16, param: u64, bytes: u8) -> u64 {
+    let bytes_field = if bytes >= 6 { 0 } else { bytes };
+    ((cond_type as u64) << 48) | ((bytes_field as u64) << 44) | (param & 0xFFFFFFFFFF)
 }
 
 fn rust_compare_prefix(address: &[u8; 20], prefix: &[u8]) -> bool {
@@ -200,7 +208,8 @@ mod opencl_tests {
     #[test]
     fn test_opencl_condition_check() {
         let address = [0x88u8; 20];
-        let condition = encode_condition(COND_PREFIX, 0x8888);
+        // 使用新版编码，2字节前缀 0x8888
+        let condition = encode_condition_with_bytes(COND_PREFIX, 0x8888, 2);
 
         match opencl_check_condition(&address, condition) {
             Ok(result) => assert!(result, "OpenCL 前缀匹配失败"),
