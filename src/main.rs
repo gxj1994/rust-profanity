@@ -35,7 +35,7 @@ struct Args {
     leading_zeros: Option<u32>,
     
     /// GPU 线程数
-    #[arg(short, long, default_value = "1024")]
+    #[arg(short, long, default_value = "96")]
     threads: u32,
     
     /// 本地工作组大小
@@ -43,7 +43,7 @@ struct Args {
     work_group_size: usize,
     
     /// 轮询间隔 (毫秒)
-    #[arg(long, default_value = "500")]
+    #[arg(long, default_value = "250")]
     poll_interval: u64,
     
     /// 超时时间 (秒，0表示无超时)
