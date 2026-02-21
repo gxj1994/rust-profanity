@@ -164,9 +164,12 @@ __kernel void search_kernel(
     uint local_checked_low = 0;
     uint local_checked_high = 0;
     
+    // 本地标志：如果本线程找到结果，设置为 true
+    bool local_found = false;
+    
     // 使用原子操作读取标志，避免编译器优化
     int flag = atomic_load_flag(g_found_flag);
-    while (!flag) {
+    while (!flag && !local_found) {
         // 增加本地计数器 (使用 64 位模拟)
         local_checked_low++;
         if (local_checked_low == 0) {
@@ -179,7 +182,7 @@ __kernel void search_kernel(
         
         // 检查条件 (使用带模式匹配的版本)
         if (check_condition_with_pattern(address, config->condition, config->pattern_mask, config->pattern_value)) {
-            // 原子操作尝试设置标志
+            // 原子操作尝试设置全局标志
             int old_val = atomic_cmpxchg(g_found_flag, 0, 1);
             if (old_val == 0) {
                 result->found = 1;
@@ -197,6 +200,8 @@ __kernel void search_kernel(
                 
                 result->found_by_thread = tid;
             }
+            // 设置本地标志，让本线程退出循环
+            local_found = true;
             break;
         }
         
@@ -205,10 +210,15 @@ __kernel void search_kernel(
             break;  // 本线程搜索空间耗尽
         }
         
-        // 定期检测全局标志并更新统计
-        if ((++counter & (config->check_interval - 1)) == 0) {
+        // 每 2048 次循环检查一次全局标志
+        // 使用位运算：counter & 2047 == 0 等价于 counter % 2048 == 0
+        if ((++counter & 2047) == 0) {
             flag = atomic_load_flag(g_found_flag);
             if (flag) break;
+        }
+        
+        // 定期更新统计到全局内存 (使用 config->check_interval)
+        if ((counter & (config->check_interval - 1)) == 0) {
             // 原子累加本线程检查的地址数 (64 位拆分)
             if (local_checked_low > 0 || local_checked_high > 0) {
                 ulong local_checked = ((ulong)local_checked_high << 32) | local_checked_low;
