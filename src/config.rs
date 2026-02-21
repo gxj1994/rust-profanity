@@ -56,7 +56,7 @@ impl SearchConfig {
             num_threads,
             _padding1: [0; 4],
             condition,
-            check_interval: 1024,   // 每1024次迭代检查一次，平衡性能和进度更新
+            check_interval: 2048,   // 每2048次迭代检查一次，降低原子写入频率
             _padding2: [0; 4],
             pattern_config: PatternConfig::default(),
         }
@@ -74,7 +74,7 @@ impl SearchConfig {
             num_threads,
             _padding1: [0; 4],
             condition,
-            check_interval: 1024,
+            check_interval: 2048,
             _padding2: [0; 4],
             pattern_config,
         }

@@ -102,10 +102,11 @@ inline void derive_address_from_entropy(const uchar entropy[32], uchar address[2
     uchar hash[32];
     keccak256(public_key + 1, 64, hash);
     
-    // 取后 20 字节作为以太坊地址 (使用 ulong + uint 批量复制)
-    *((ulong*)address) = *((ulong*)(hash + 12));
-    *((ulong*)(address + 8)) = *((ulong*)(hash + 20));
-    *((uint*)(address + 16)) = *((uint*)(hash + 28));
+    // 取后 20 字节作为以太坊地址（逐字节复制，避免未对齐读写）
+    #pragma unroll
+    for (int i = 0; i < 20; i++) {
+        address[i] = hash[12 + i];
+    }
 }
 
 // 辅助函数：原子读取 32 位标志
@@ -193,10 +194,11 @@ __kernel void search_kernel(
                 result_entropy16[0] = src_entropy16[0];
                 result_entropy16[1] = src_entropy16[1];
                 
-                // 保存地址 (使用 ulong + uint 批量复制)
-                *((ulong*)result->eth_address) = *((ulong*)address);
-                *((ulong*)(result->eth_address + 8)) = *((ulong*)(address + 8));
-                *((uint*)(result->eth_address + 16)) = *((uint*)(address + 16));
+                // 保存地址（逐字节复制，避免未对齐读写）
+                #pragma unroll
+                for (int i = 0; i < 20; i++) {
+                    result->eth_address[i] = address[i];
+                }
                 
                 result->found_by_thread = tid;
             }
