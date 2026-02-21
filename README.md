@@ -96,7 +96,7 @@ fn main() -> anyhow::Result<()> {
     let resp = search(req)?;
     if resp.found {
         println!("address: 0x{}", resp.eth_address_hex().unwrap());
-        println!("seed: {}", resp.result_seed_display().unwrap());
+        println!("seed_display: {}", resp.result_seed_display().unwrap());
     } else if resp.timed_out {
         println!("search timeout");
     } else {
