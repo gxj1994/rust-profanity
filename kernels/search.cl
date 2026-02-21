@@ -5,16 +5,19 @@
 // 不要在此文件中添加 #include 语句
 
 // 搜索配置结构 (与Rust端对应)
-// Rust 布局: base_entropy[32] @0, num_threads @32, condition @40, check_interval @48
-// 总大小: 56 bytes (包含 4 bytes 填充在末尾)
+// Rust 布局: base_entropy[32] @0, num_threads @32, condition @40, check_interval @48, pattern_config @56
+// 总大小: 96 bytes (包含填充)
 // 注意：使用基本类型数组而不是嵌套结构体，避免OpenCL兼容性问题
 typedef struct {
-    uchar base_entropy[32];  // 基础熵 (256位)，而非助记词单词 - offset 0
-    uint num_threads;        // offset 32
-    uchar _padding1[4];      // 填充以对齐 condition 到 8 字节边界
-    ulong condition;         // offset 40
-    uint check_interval;     // offset 48
-    uchar _padding2[4];      // 填充以对齐到 8 字节边界，总大小 56
+    uchar base_entropy[32];      // 基础熵 (256位)，而非助记词单词 - offset 0
+    uint num_threads;            // offset 32
+    uchar _padding1[4];          // 填充以对齐 condition 到 8 字节边界
+    ulong condition;             // offset 40
+    uint check_interval;         // offset 48
+    uchar _padding2[4];          // 填充以对齐 pattern_config
+    // pattern_config 展开 (offset 56)
+    uchar pattern_mask[20];      // 掩码数组 - 哪些位需要匹配
+    uchar pattern_value[20];     // 期望值数组 - 需要匹配的值
 } search_config_t;
 
 // 搜索结果结构
@@ -135,24 +138,11 @@ inline void atom_add_64(__global uint* low, __global uint* high, ulong value) {
 __kernel void search_kernel(
     __constant search_config_t* config,
     __global search_result_t* result,
-    __global int* g_found_flag,
-    __local point* shared_precomputed  // 共享预计算表，大小为 16
+    __global int* g_found_flag
 ) {
     uint tid = get_global_id(0);
-    uint lid = get_local_id(0);
-    uint local_size = get_local_size(0);
     
     if (tid >= config->num_threads) return;
-    
-    // 第一个 work-item 将预计算表从 __constant 复制到 __local
-    if (lid == 0) {
-        for (int i = 0; i < 16; i++) {
-            shared_precomputed[i] = PRECOMPUTED_G[i];
-        }
-    }
-    
-    // 等待所有 work-item 同步，确保复制完成
-    barrier(CLK_LOCAL_MEM_FENCE);
     
     // 复制基础熵到本地内存 (使用 uchar16 向量类型优化)
     uchar local_entropy[32];
@@ -187,8 +177,8 @@ __kernel void search_kernel(
         uchar address[20];
         derive_address_from_entropy(local_entropy, address);
         
-        // 检查条件
-        if (check_condition(address, config->condition)) {
+        // 检查条件 (使用带模式匹配的版本)
+        if (check_condition_with_pattern(address, config->condition, config->pattern_mask, config->pattern_value)) {
             // 原子操作尝试设置标志
             int old_val = atomic_cmpxchg(g_found_flag, 0, 1);
             if (old_val == 0) {

@@ -60,9 +60,6 @@ impl SearchKernel {
         let initial_flag: Vec<i32> = vec![0];
         flag_buffer.write(&initial_flag).enq()?;
         
-        // 创建 __local 内存缓冲区用于预计算表 (16个点 * 64字节/点 = 1024字节)
-        let local_precomputed_size = 16 * std::mem::size_of::<[u32; 16]>(); // point 结构体大小
-        
         // 创建内核
         let kernel = Kernel::builder()
             .program(&program)
@@ -72,7 +69,6 @@ impl SearchKernel {
             .arg(&config_buffer)
             .arg(&result_buffer)
             .arg(&flag_buffer)
-            .arg_local::<u8>(local_precomputed_size) // __local 内存参数
             .build()?;
         
         Ok(Self {

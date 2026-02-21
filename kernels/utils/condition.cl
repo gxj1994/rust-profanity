@@ -134,6 +134,40 @@ inline uint count_leading_zeros(const uchar address[20]) {
     return count;
 }
 
+// 比较模式 - profanity 风格 (本地内存版本)
+// 使用 mask 和 value 数组进行灵活的模式匹配
+inline bool compare_pattern_local(
+    const uchar address[20],
+    const uchar mask[20],
+    const uchar value[20]
+) {
+    for (int i = 0; i < 20; ++i) {
+        if (mask[i] > 0) {
+            if ((address[i] & mask[i]) != value[i]) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+// 比较模式 - profanity 风格 (__constant 内存版本)
+// 用于从 __constant 内存读取模式配置
+inline bool compare_pattern(
+    const uchar address[20],
+    __constant const uchar* mask,
+    __constant const uchar* value
+) {
+    for (int i = 0; i < 20; ++i) {
+        if (mask[i] > 0) {
+            if ((address[i] & mask[i]) != value[i]) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
 // 检查条件
 inline bool check_condition(const uchar address[20], ulong condition) {
     ushort type = (condition >> 48) & 0xFFFF;
@@ -148,6 +182,31 @@ inline bool check_condition(const uchar address[20], ulong condition) {
             return count_leading_zeros(address) >= param;
         case COND_LEADING_EXACT:
             return count_leading_zeros(address) == param;
+        default:
+            return false;
+    }
+}
+
+// 检查条件 (带模式匹配版本 - __constant 内存)
+inline bool check_condition_with_pattern(
+    const uchar address[20],
+    ulong condition,
+    __constant const uchar* mask,
+    __constant const uchar* value
+) {
+    ushort type = (condition >> 48) & 0xFFFF;
+    
+    switch (type) {
+        case COND_PATTERN:
+            return compare_pattern(address, mask, value);
+        case COND_PREFIX:
+            return compare_prefix(address, condition);
+        case COND_SUFFIX:
+            return compare_suffix(address, condition);
+        case COND_LEADING:
+            return count_leading_zeros(address) >= (condition & 0xFFFFFFFFFFFFULL);
+        case COND_LEADING_EXACT:
+            return count_leading_zeros(address) == (condition & 0xFFFFFFFFFFFFULL);
         default:
             return false;
     }

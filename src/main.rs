@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use std::thread::sleep;
 
 use rust_profanity::{
-    config::{*},
+    config::{*, PatternConfig},
     mnemonic::Mnemonic,
     opencl::{OpenCLContext, SearchKernel},
 };
@@ -34,6 +34,11 @@ struct Args {
     #[arg(long, group = "condition")]
     leading_zeros: Option<u32>,
     
+    /// 模式匹配 (完整地址模式，如 0xXXXXXXXXXXXXdeadXXXXXXXXXXXXXXXXXXXXXXXX)
+    /// X/*/? 表示通配符，其他字符表示需要匹配的值
+    #[arg(long, group = "condition")]
+    pattern: Option<String>,
+    
     /// GPU 线程数
     #[arg(short, long, default_value = "1024")]
     threads: u32,
@@ -52,18 +57,22 @@ struct Args {
 }
 
 /// 解析搜索条件
-fn parse_condition(args: &Args) -> anyhow::Result<u64> {
+fn parse_condition(args: &Args) -> anyhow::Result<(u64, Option<PatternConfig>)> {
     if let Some(prefix) = &args.prefix {
         info!("搜索条件: 前缀匹配 {}", prefix);
-        parse_prefix_condition(prefix)
+        Ok((parse_prefix_condition(prefix)?, None))
     } else if let Some(suffix) = &args.suffix {
         info!("搜索条件: 后缀匹配 {}", suffix);
-        parse_suffix_condition(suffix)
+        Ok((parse_suffix_condition(suffix)?, None))
     } else if let Some(zeros) = args.leading_zeros {
         info!("搜索条件: 前导零至少 {} 个", zeros);
-        parse_leading_zeros_condition(zeros)
+        Ok((parse_leading_zeros_condition(zeros)?, None))
+    } else if let Some(pattern) = &args.pattern {
+        info!("搜索条件: 模式匹配 {}", pattern);
+        let (condition, pattern_config) = parse_pattern_condition(pattern)?;
+        Ok((condition, Some(pattern_config)))
     } else {
-        anyhow::bail!("请指定搜索条件: --prefix, --suffix 或 --leading-zeros")
+        anyhow::bail!("请指定搜索条件: --prefix, --suffix, --leading-zeros 或 --pattern")
     }
 }
 
@@ -142,7 +151,7 @@ fn main() -> anyhow::Result<()> {
     info!("搜索空间: {} 个线程从随机熵开始并行遍历", args.threads);
     
     // 2. 解析搜索条件
-    let condition = parse_condition(&args)?;
+    let (condition, pattern_config) = parse_condition(&args)?;
     info!("条件编码: 0x{:016X}", condition);
     
     // 3. 初始化 OpenCL
@@ -162,11 +171,13 @@ fn main() -> anyhow::Result<()> {
     if !checksum_valid {
         log::warn!("基础助记词校验和验证失败，继续执行...");
     }
-    let config = SearchConfig::new(
-        base_entropy,
-        args.threads,
-        condition,
-    );
+    
+    // 根据是否有模式匹配创建配置
+    let config = if let Some(pattern) = pattern_config {
+        SearchConfig::new_with_pattern(base_entropy, args.threads, condition, pattern)
+    } else {
+        SearchConfig::new(base_entropy, args.threads, condition)
+    };
     search_kernel.set_config(&config)?;
     
     // 6. 启动内核
@@ -278,13 +289,14 @@ mod tests {
             prefix: Some("8888".to_string()),
             suffix: None,
             leading_zeros: None,
+            pattern: None,
             threads: 1024,
             work_group_size: 256,
             poll_interval: 100,
             timeout: 0,
         };
         
-        let condition = parse_condition(&args).unwrap();
+        let (condition, _) = parse_condition(&args).unwrap();
         assert!(condition > 0);
     }
 
@@ -295,6 +307,7 @@ mod tests {
             prefix: None,
             suffix: None,
             leading_zeros: None,
+            pattern: None,
             threads: 1024,
             work_group_size: 128,
             poll_interval: 250,

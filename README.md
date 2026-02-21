@@ -73,6 +73,24 @@ cargo test
 ./target/release/rust-profanity --leading-zeros 4 --threads 1024 --timeout 300
 ```
 
+### 模式匹配
+
+搜索包含特定模式的以太坊地址（使用 `X`、`*` 或 `?` 作为通配符）：
+
+```bash
+# 搜索后缀为 "dead" 的地址
+./target/release/rust-profanity --pattern 0xXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXdead --threads 1024 --timeout 60
+
+# 搜索前缀为 "0000" 的地址
+./target/release/rust-profanity --pattern 0x0000XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX --threads 1024 --timeout 60
+
+# 搜索中间包含 "abcd" 的地址
+./target/release/rust-profanity --pattern 0xXXXXXXXXXXXXabcdXXXXXXXXXXXXXXXXXXXXXXXX --threads 2048 --timeout 120
+
+# 搜索多个特定位置
+./target/release/rust-profanity --pattern 0x00XX11XX22XXXXXXXXXXXXXXXXXXXXXXXXXXXXXX --threads 4096 --timeout 300
+```
+
 ### 参数说明
 
 | 参数 | 说明 | 默认值 |
@@ -80,6 +98,7 @@ cargo test
 | `--prefix` | 地址前缀匹配 (十六进制) | - |
 | `--suffix` | 地址后缀匹配 (十六进制) | - |
 | `--leading-zeros` | 前导零个数 | - |
+| `--pattern` | 完整地址模式匹配 (X/*/? 为通配符) | - |
 | `--threads` | GPU 线程数 | 1024 |
 | `--timeout` | 搜索超时时间 (秒) | 60 |
 | `--work-group-size` | OpenCL 工作组大小 | 128 |
