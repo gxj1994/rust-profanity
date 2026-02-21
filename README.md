@@ -2,6 +2,8 @@
 
 GPU 以太坊靓号地址搜索系统 - Rust + OpenCL 实现
 
+> ⚠️ **注意**: 本项目由 AI 辅助编写，仅供学习研究使用，生产环境请谨慎使用。
+
 ## 功能特性
 
 - **GPU 加速**: 使用 OpenCL 在 GPU 上并行搜索以太坊靓号地址
@@ -57,6 +59,14 @@ cargo test
 ./target/release/rust-profanity --prefix 00 --threads 256 --timeout 60
 ```
 
+### 直接私钥模式
+
+跳过助记词推导，直接从随机私钥起点并行遍历（更快）：
+
+```bash
+./target/release/rust-profanity --prefix 00 --source-mode private-key --threads 256 --timeout 60
+```
+
 ### 后缀匹配
 
 搜索以 `dead` 结尾的以太坊地址：
@@ -102,6 +112,7 @@ cargo test
 | `--threads` | GPU 线程数 | 1024 |
 | `--timeout` | 搜索超时时间 (秒) | 60 |
 | `--work-group-size` | OpenCL 工作组大小 | 128 |
+| `--source-mode` | 搜索来源模式: `mnemonic` / `private-key` | `mnemonic` |
 
 ## 输出示例
 

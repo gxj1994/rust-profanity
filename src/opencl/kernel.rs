@@ -1,6 +1,7 @@
 //! OpenCL 内核加载与执行
 
 use ocl::{Buffer, Event, Kernel, Program, SpatialDims};
+use ocl::enums::{ProgramBuildInfo, ProgramBuildInfoResult};
 use log::{info, debug};
 
 use crate::config::{SearchConfig, SearchResult};
@@ -30,6 +31,39 @@ pub struct SearchKernel {
 }
 
 impl SearchKernel {
+    fn collect_program_build_logs(program: &Program, ctx: &OpenCLContext) -> String {
+        let mut out = String::new();
+        for device in ctx.context.devices() {
+            let device_name = device.name().unwrap_or_else(|_| String::from("<unknown>"));
+            out.push_str(&format!("Device: {}\n", device_name));
+
+            match program.build_info(device, ProgramBuildInfo::BuildStatus) {
+                Ok(info) => out.push_str(&format!("  BuildStatus: {}\n", info)),
+                Err(e) => out.push_str(&format!("  BuildStatus error: {}\n", e)),
+            }
+
+            match program.build_info(device, ProgramBuildInfo::BuildOptions) {
+                Ok(info) => out.push_str(&format!("  BuildOptions: {}\n", info)),
+                Err(e) => out.push_str(&format!("  BuildOptions error: {}\n", e)),
+            }
+
+            match program.build_info(device, ProgramBuildInfo::BuildLog) {
+                Ok(ProgramBuildInfoResult::BuildLog(log)) => {
+                    if log.trim().is_empty() {
+                        out.push_str("  BuildLog: <empty>\n");
+                    } else {
+                        out.push_str("  BuildLog:\n");
+                        out.push_str(&log);
+                        out.push('\n');
+                    }
+                }
+                Ok(other) => out.push_str(&format!("  BuildLog unexpected: {}\n", other)),
+                Err(e) => out.push_str(&format!("  BuildLog error: {}\n", e)),
+            }
+        }
+        out
+    }
+
     /// 创建新的搜索内核
     /// 
     /// # Arguments
@@ -75,7 +109,7 @@ impl SearchKernel {
         flag_buffer.write(&initial_flag).enq()?;
         
         // 创建内核
-        let kernel = Kernel::builder()
+        let kernel = match Kernel::builder()
             .program(&program)
             .name("search_kernel")
             .queue(ctx.queue.clone())
@@ -84,7 +118,13 @@ impl SearchKernel {
             .arg(&result_buffer)
             .arg(&flag_buffer)
             .arg(&thread_checked_buffer)
-            .build()?;
+            .build() {
+            Ok(k) => k,
+            Err(e) => {
+                let logs = Self::collect_program_build_logs(&program, ctx);
+                anyhow::bail!("Failed to create kernel 'search_kernel': {}\nOpenCL build diagnostics:\n{}", e, logs);
+            }
+        };
         
         Ok(Self {
             program,

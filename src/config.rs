@@ -24,17 +24,22 @@ impl Default for PatternConfig {
 
 /// 搜索任务配置 (传递给 GPU)
 /// 注意：必须与 OpenCL 的 search_config_t 结构体完全匹配
-/// OpenCL 布局: base_entropy[32] @0, num_threads @32, _padding1[4] @36, condition @40, 
-///              check_interval @48, _padding2[4] @52, pattern_mask[20] @56, pattern_value[20] @76
-/// 总大小: 96 bytes
+/// OpenCL 布局: base_seed[32] @0, num_threads @32, source_mode @36, target_chain @40,
+///              _padding1[4] @44, condition @48, check_interval @56, _padding2[4] @60,
+///              pattern_mask[20] @64, pattern_value[20] @84
+/// 总大小: 104 bytes
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct SearchConfig {
-    /// 基础熵 (32字节 = 256位) - 对应 OpenCL uchar[32]
-    /// 使用熵而非助记词，确保 GPU 可以生成符合 BIP39 标准的有效助记词
-    pub base_entropy: [u8; 32],
+    /// 基础种子 (32字节 = 256位) - 对应 OpenCL uchar[32]
+    /// 根据 source_mode 解释为熵或私钥起点
+    pub base_seed: [u8; 32],
     /// GPU 线程数 - 对应 OpenCL uint
     pub num_threads: u32,
+    /// 搜索来源模式 - 对应 OpenCL uint
+    pub source_mode: u32,
+    /// 目标链类型 - 对应 OpenCL uint
+    pub target_chain: u32,
     /// 填充以对齐 condition 到 8 字节边界 - 对应 OpenCL _padding1[4]
     _padding1: [u8; 4],
     /// 搜索条件编码 - 对应 OpenCL ulong
@@ -50,10 +55,12 @@ pub struct SearchConfig {
 }
 
 impl SearchConfig {
-    pub fn new(base_entropy: [u8; 32], num_threads: u32, condition: u64) -> Self {
+    pub fn new(base_seed: [u8; 32], num_threads: u32, condition: u64) -> Self {
         Self {
-            base_entropy,
+            base_seed,
             num_threads,
+            source_mode: SourceMode::MnemonicEntropy as u32,
+            target_chain: TargetChain::Ethereum as u32,
             _padding1: [0; 4],
             condition,
             check_interval: 2048,   // 每2048次迭代检查一次，降低原子写入频率
@@ -64,20 +71,32 @@ impl SearchConfig {
 
     /// 创建带模式匹配的配置
     pub fn new_with_pattern(
-        base_entropy: [u8; 32],
+        base_seed: [u8; 32],
         num_threads: u32,
         condition: u64,
         pattern_config: PatternConfig,
     ) -> Self {
         Self {
-            base_entropy,
+            base_seed,
             num_threads,
+            source_mode: SourceMode::MnemonicEntropy as u32,
+            target_chain: TargetChain::Ethereum as u32,
             _padding1: [0; 4],
             condition,
             check_interval: 2048,
             _padding2: [0; 4],
             pattern_config,
         }
+    }
+
+    pub fn with_source_mode(mut self, source_mode: SourceMode) -> Self {
+        self.source_mode = source_mode as u32;
+        self
+    }
+
+    pub fn with_target_chain(mut self, target_chain: TargetChain) -> Self {
+        self.target_chain = target_chain as u32;
+        self
     }
 }
 
@@ -88,9 +107,9 @@ impl SearchConfig {
 pub struct SearchResult {
     /// 是否找到 (0/1) - 对应 OpenCL int
     pub found: i32,
-    /// 找到的熵 (32字节) - 对应 OpenCL uchar[32]
-    /// 由 Rust 端转换为助记词，确保校验和正确
-    pub result_entropy: [u8; 32],
+    /// 找到的候选密钥材料 (32字节) - 对应 OpenCL uchar[32]
+    /// 在不同 source_mode 下，可能表示熵或私钥
+    pub result_seed: [u8; 32],
     /// 以太坊地址 (20字节) - 对应 OpenCL uchar[20]
     pub eth_address: [u8; 20],
     /// 由哪个线程找到 - 对应 OpenCL uint
@@ -105,12 +124,39 @@ impl Default for SearchResult {
     fn default() -> Self {
         Self {
             found: 0,
-            result_entropy: [0u8; 32],
+            result_seed: [0u8; 32],
             eth_address: [0u8; 20],
             found_by_thread: 0,
             total_checked_low: 0,
             total_checked_high: 0,
         }
+    }
+}
+
+/// 搜索来源模式
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SourceMode {
+    /// 从 32 字节熵派生助记词，再生成私钥
+    MnemonicEntropy = 0,
+    /// 直接将 32 字节作为私钥遍历
+    PrivateKey = 1,
+}
+
+impl SourceMode {
+    pub fn as_u32(self) -> u32 {
+        self as u32
+    }
+}
+
+/// 目标链类型 (预留扩展，比如 Bitcoin)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TargetChain {
+    Ethereum = 0,
+}
+
+impl TargetChain {
+    pub fn as_u32(self) -> u32 {
+        self as u32
     }
 }
 
@@ -312,10 +358,10 @@ mod tests {
     #[test]
     fn test_struct_sizes() {
         // 验证结构体大小与 OpenCL 端匹配
-        // OpenCL: typedef struct { uchar[32]; uint; ulong; uint; } = 32 + 4 + 8 + 4 = 48 (可能有填充)
+        // OpenCL: typedef struct { uchar[32]; uint; uint; uint; uchar[4]; ulong; uint; uchar[4]; uchar[20]; uchar[20]; }
         let config_size = std::mem::size_of::<SearchConfig>();
         println!("SearchConfig size: {}", config_size);
-        assert!(config_size >= 48, "SearchConfig too small");
+        assert!(config_size >= 104, "SearchConfig too small");
 
         // OpenCL: typedef struct { int; uchar[32]; uchar[20]; uint; uint; uint; } = 4 + 32 + 20 + 4 + 4 + 4 = 68 (可能有填充)
         let result_size = std::mem::size_of::<SearchResult>();
@@ -327,7 +373,7 @@ mod tests {
     fn test_total_checked() {
         let result = SearchResult {
             found: 0,
-            result_entropy: [0u8; 32],
+            result_seed: [0u8; 32],
             eth_address: [0u8; 20],
             found_by_thread: 0,
             total_checked_low: 0x12345678,

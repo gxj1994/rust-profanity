@@ -356,7 +356,7 @@ typedef struct {
 /* 使用 Python fastecdsa 库计算生成                                          */
 /* ------------------------------------------------------------------------ */
 // 预计算表数据 - 使用宏简化初始化
-#define MP_NUM(a0,a1,a2,a3,a4,a5,a6,a7) {{{a0,a1,a2,a3,a4,a5,a6,a7}}}
+#define MP_NUM(a0,a1,a2,a3,a4,a5,a6,a7) {{a0,a1,a2,a3,a4,a5,a6,a7}}
 
 __constant const point PRECOMPUTED_G[16] = {
     // 1*G (索引 0)

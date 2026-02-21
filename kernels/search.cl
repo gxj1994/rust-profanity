@@ -5,17 +5,20 @@
 // 不要在此文件中添加 #include 语句
 
 // 搜索配置结构 (与Rust端对应)
-// Rust 布局: base_entropy[32] @0, num_threads @32, condition @40, check_interval @48, pattern_config @56
-// 总大小: 96 bytes (包含填充)
+// Rust 布局: base_seed[32] @0, num_threads @32, source_mode @36, target_chain @40,
+//            condition @48, check_interval @56, pattern_config @64
+// 总大小: 104 bytes (包含填充)
 // 注意：使用基本类型数组而不是嵌套结构体，避免OpenCL兼容性问题
 typedef struct {
-    uchar base_entropy[32];      // 基础熵 (256位)，而非助记词单词 - offset 0
+    uchar base_seed[32];         // 基础种子 (256位) - offset 0
     uint num_threads;            // offset 32
-    uchar _padding1[4];          // 填充以对齐 condition 到 8 字节边界
-    ulong condition;             // offset 40
-    uint check_interval;         // offset 48
-    uchar _padding2[4];          // 填充以对齐 pattern_config
-    // pattern_config 展开 (offset 56)
+    uint source_mode;            // offset 36
+    uint target_chain;           // offset 40
+    uchar _padding1[4];          // offset 44
+    ulong condition;             // offset 48
+    uint check_interval;         // offset 56
+    uchar _padding2[4];          // offset 60
+    // pattern_config 展开 (offset 64)
     uchar pattern_mask[20];      // 掩码数组 - 哪些位需要匹配
     uchar pattern_value[20];     // 期望值数组 - 需要匹配的值
 } search_config_t;
@@ -23,7 +26,7 @@ typedef struct {
 // 搜索结果结构
 typedef struct {
     int found;
-    uchar result_entropy[32];  // 找到的熵 (32字节)，由 Rust 端转换为助记词
+    uchar result_seed[32];     // 找到的种子材料 (32字节)，可解释为熵或私钥
     uchar eth_address[20];
     uint found_by_thread;
     uint total_checked_low;    // 总共检查的地址数量 - 低32位
@@ -98,6 +101,18 @@ inline void derive_address_from_entropy(const uchar entropy[32], uchar address[2
     }
 }
 
+// 从私钥直接生成以太坊地址
+inline void derive_address_from_private_key(const uchar private_key[32], uchar address[20]) {
+    uchar public_key[65];
+    uchar hash[32];
+    private_to_public(private_key, public_key);
+    keccak256(public_key + 1, 64, hash);
+    #pragma unroll
+    for (int i = 0; i < 20; i++) {
+        address[i] = hash[12 + i];
+    }
+}
+
 // 辅助函数：原子读取 32 位标志
 inline int atomic_load_flag(__global int* flag) {
     return atomic_add(flag, 0);
@@ -117,17 +132,17 @@ __kernel void search_kernel(
     // 默认计数清零，确保提前退出时不会读到垃圾值
     thread_checked[tid] = 0;
     
-    // 复制基础熵到本地内存 (使用 uchar16 向量类型优化)
-    uchar local_entropy[32];
-    __constant uchar16* src16 = (__constant uchar16*)config->base_entropy;
-    uchar16* dst16 = (uchar16*)local_entropy;
+    // 复制基础种子到本地内存 (使用 uchar16 向量类型优化)
+    uchar local_seed[32];
+    __constant uchar16* src16 = (__constant uchar16*)config->base_seed;
+    uchar16* dst16 = (uchar16*)local_seed;
     dst16[0] = src16[0];
     dst16[1] = src16[1];
     
     // 设置本线程的起始偏移
     // 每个线程从 tid 步进开始，步长为 num_threads
     if (tid > 0) {
-        if (!increment_entropy(local_entropy, tid)) {
+        if (!increment_entropy(local_seed, tid)) {
             // 溢出，此线程没有搜索空间
             return;
         }
@@ -149,9 +164,20 @@ __kernel void search_kernel(
             local_checked_high++;
         }
         
-        // 从熵生成以太坊地址 (自动包含正确的 BIP39 校验和)
         uchar address[20];
-        derive_address_from_entropy(local_entropy, address);
+        if (config->target_chain == 0) { // Ethereum
+            if (config->source_mode == 0) {
+                // 从熵生成以太坊地址 (自动包含正确的 BIP39 校验和)
+                derive_address_from_entropy(local_seed, address);
+            } else if (config->source_mode == 1) {
+                // 直接私钥模式
+                derive_address_from_private_key(local_seed, address);
+            } else {
+                break;
+            }
+        } else {
+            break;
+        }
         
         // 检查条件 (使用带模式匹配的版本)
         if (check_condition_with_pattern(address, config->condition, config->pattern_mask, config->pattern_value)) {
@@ -159,12 +185,11 @@ __kernel void search_kernel(
             int old_val = atomic_cmpxchg(g_found_flag, 0, 1);
             if (old_val == 0) {
                 result->found = 1;
-                // 保存熵 (使用 uchar16 向量类型优化)
-                // 注意：必须保存当前的 local_entropy，而不是原始的 base_entropy
-                uchar16* result_entropy16 = (uchar16*)result->result_entropy;
-                uchar16* src_entropy16 = (uchar16*)local_entropy;
-                result_entropy16[0] = src_entropy16[0];
-                result_entropy16[1] = src_entropy16[1];
+                // 保存当前种子 (使用 uchar16 向量类型优化)
+                uchar16* result_seed16 = (uchar16*)result->result_seed;
+                uchar16* src_seed16 = (uchar16*)local_seed;
+                result_seed16[0] = src_seed16[0];
+                result_seed16[1] = src_seed16[1];
                 
                 // 保存地址（逐字节复制，避免未对齐读写）
                 #pragma unroll
@@ -179,8 +204,8 @@ __kernel void search_kernel(
             break;
         }
         
-        // 遍历到下一个熵值
-        if (!increment_entropy(local_entropy, config->num_threads)) {
+        // 遍历到下一个种子值
+        if (!increment_entropy(local_seed, config->num_threads)) {
             break;  // 本线程搜索空间耗尽
         }
         

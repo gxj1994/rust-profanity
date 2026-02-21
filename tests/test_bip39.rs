@@ -2,6 +2,7 @@
 
 use bip39::{Mnemonic, Language};
 use ocl::{ProQue, Buffer, MemFlags};
+use ocl::enums::{ProgramBuildInfo, ProgramBuildInfoResult};
 
 const BIP39_TEST_VECTORS: &[(&str, &str)] = &[
     // (助记词, 种子十六进制)
@@ -93,6 +94,68 @@ fn opencl_mnemonic_to_seed(word_indices: &[u16; 24]) -> ocl::Result<[u8; 64]> {
     let mut fixed_result = [0u8; 64];
     fixed_result.copy_from_slice(&result);
     Ok(fixed_result)
+}
+
+fn print_opencl_build_logs(proque: &ProQue, label: &str) {
+    println!("========== OpenCL Build Logs: {} ==========", label);
+    for device in proque.context().devices() {
+        let device_name = device.name().unwrap_or_else(|_| String::from("<unknown>"));
+        println!("--- Device: {} ---", device_name);
+
+        match proque.program().build_info(device, ProgramBuildInfo::BuildStatus) {
+            Ok(status) => println!("BuildStatus: {}", status),
+            Err(e) => println!("BuildStatus 获取失败: {}", e),
+        }
+
+        match proque.program().build_info(device, ProgramBuildInfo::BuildOptions) {
+            Ok(options) => println!("BuildOptions: {}", options),
+            Err(e) => println!("BuildOptions 获取失败: {}", e),
+        }
+
+        match proque.program().build_info(device, ProgramBuildInfo::BuildLog) {
+            Ok(ProgramBuildInfoResult::BuildLog(log)) => {
+                if log.trim().is_empty() {
+                    println!("BuildLog: <empty>");
+                } else {
+                    println!("BuildLog:\n{}", log);
+                }
+            }
+            Ok(other) => println!("BuildLog 返回了非日志结果: {}", other),
+            Err(e) => println!("BuildLog 获取失败: {}", e),
+        }
+    }
+    println!("========== End OpenCL Build Logs ==========");
+}
+
+fn build_and_create_smoke_kernel(source: &str, compiler_opt: Option<&str>) -> Result<(), String> {
+    let mut builder = ProQue::builder();
+    if let Some(opt) = compiler_opt {
+        let mut pb = ocl::Program::builder();
+        pb.src(source).cmplr_opt(opt);
+        builder.prog_bldr(pb);
+    } else {
+        builder.src(source);
+    }
+    let proque = builder
+        .dims(1)
+        .build()
+        .map_err(|e| format!("build failed: {}", e))?;
+
+    let buffer = Buffer::<u8>::builder()
+        .queue(proque.queue().clone())
+        .flags(MemFlags::WRITE_ONLY)
+        .len(1)
+        .build()
+        .map_err(|e| format!("buffer failed: {}", e))?;
+
+    proque.kernel_builder("smoke_kernel")
+        .arg(&buffer)
+        .build()
+        .map(|_| ())
+        .map_err(|e| {
+            print_opencl_build_logs(&proque, "compile_matrix");
+            format!("create kernel failed: {}", e)
+        })
 }
 
 fn mnemonic_to_indices(mnemonic: &str) -> [u16; 24] {
@@ -208,6 +271,53 @@ mod tests {
             // 如果 OpenCL 可用，测试种子生成
             if let Ok(cl_seed) = opencl_mnemonic_to_seed(&indices) {
                 assert_eq!(cl_seed.len(), 64);
+            }
+        }
+    }
+
+    /// OpenCL 编译分层诊断：
+    /// 使用 `cargo test --test mod test_opencl_compile_matrix -- --ignored --nocapture` 手动运行
+    #[test]
+    #[ignore]
+    fn test_opencl_compile_matrix() {
+        let with_smoke = |body: &str| -> String {
+            let mut s = String::new();
+            s.push_str(body);
+            s.push('\n');
+            s.push_str("__kernel void smoke_kernel(__global uchar* out){ out[0]=1; }\n");
+            s
+        };
+
+        let mut stages: Vec<(&str, String)> = Vec::new();
+        stages.push(("smoke_only", with_smoke("")));
+
+        let mut base = String::new();
+        base.push_str(include_str!("../kernels/crypto/sha512.cl"));
+        base.push('\n');
+        stages.push(("sha512", with_smoke(&base)));
+
+        base.push_str(include_str!("../kernels/crypto/pbkdf2.cl"));
+        base.push('\n');
+        stages.push(("sha512+pbkdf2", with_smoke(&base)));
+
+        base.push_str(include_str!("../kernels/crypto/sha256.cl"));
+        base.push('\n');
+        stages.push(("...+sha256", with_smoke(&base)));
+
+        base.push_str(include_str!("../kernels/crypto/keccak.cl"));
+        base.push('\n');
+        stages.push(("...+keccak", with_smoke(&base)));
+
+        base.push_str(include_str!("../kernels/crypto/secp256k1.cl"));
+        base.push('\n');
+        stages.push(("...+secp256k1", with_smoke(&base)));
+
+        for (name, stage_src) in stages {
+            match build_and_create_smoke_kernel(&stage_src, None) {
+                Ok(_) => println!("[OK] {}", name),
+                Err(e) => {
+                    panic!("[FAIL] {} => {}", name, e);
+                }
             }
         }
     }
@@ -504,6 +614,11 @@ __kernel void test_address_from_entropy(
         address_out[i] = address[i];
     }
 }
+
+// 烟雾测试内核：用于验证程序对象是否可创建任意内核
+__kernel void smoke_kernel(__global uchar* out) {
+    out[0] = 42;
+}
 "#);
     
     // 创建OpenCL上下文
@@ -534,13 +649,35 @@ __kernel void test_address_from_entropy(
         .len(20)
         .build()
         .expect("创建地址缓冲区失败");
+
+    // 烟雾核：如果这个都创建失败，说明 program 整体不可执行
+    let smoke_buffer = Buffer::<u8>::builder()
+        .queue(proque.queue().clone())
+        .flags(MemFlags::WRITE_ONLY)
+        .len(1)
+        .build()
+        .expect("创建烟雾缓冲区失败");
+    let smoke_res = proque.kernel_builder("smoke_kernel")
+        .arg(&smoke_buffer)
+        .build();
+    if let Err(e) = smoke_res {
+        print_opencl_build_logs(&proque, "test_opencl_address_matches_rust_smoke");
+        panic!("smoke_kernel 创建失败，program 整体不可执行: {}", e);
+    }
     
     // 创建内核
-    let kernel = proque.kernel_builder("test_address_from_entropy")
+    let kernel = match proque.kernel_builder("test_address_from_entropy")
         .arg(&entropy_buffer)
         .arg(&address_buffer)
-        .build()
-        .expect("创建内核失败");
+        .build() {
+        Ok(k) => k,
+        Err(e) => {
+            print_opencl_build_logs(&proque, "test_opencl_address_matches_rust");
+            let source_tail: String = source.lines().rev().take(120).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join("\n");
+            println!("--- Kernel Source Tail (last 120 lines) ---\n{}", source_tail);
+            panic!("创建内核失败: {}", e);
+        }
+    };
     
     // 执行内核
     unsafe {
@@ -617,6 +754,11 @@ __kernel void test_scalar_mult_comparison_kernel(
     }
     result[130] = (uchar)match;
 }
+
+// 烟雾测试内核
+__kernel void smoke_kernel(__global uchar* out) {
+    out[0] = 7;
+}
 "#;
     
     let source = kernel_source + test_kernel;
@@ -640,12 +782,35 @@ __kernel void test_scalar_mult_comparison_kernel(
         .len(131)
         .build()
         .expect("创建结果缓冲区失败");
+
+    let smoke_buffer = Buffer::<u8>::builder()
+        .queue(proque.queue().clone())
+        .flags(MemFlags::WRITE_ONLY)
+        .len(1)
+        .build()
+        .expect("创建烟雾缓冲区失败");
+    let smoke_res = proque.kernel_builder("smoke_kernel")
+        .arg(&smoke_buffer)
+        .build();
+    if let Err(e) = smoke_res {
+        print_opencl_build_logs(&proque, "test_jacobian_scalar_mult_smoke");
+        panic!("smoke_kernel 创建失败，program 整体不可执行: {}", e);
+    }
     
     // 创建内核
-    let kernel = proque.kernel_builder("test_scalar_mult_comparison_kernel")
+    let kernel = match proque.kernel_builder("test_scalar_mult_comparison_kernel")
         .arg(&result_buffer)
-        .build()
-        .expect("创建内核失败");
+        .build() {
+        Ok(k) => k,
+        Err(e) => {
+            print_opencl_build_logs(&proque, "test_jacobian_scalar_mult");
+            println!("--- Kernel Source Tail (last 80 lines) ---");
+            for line in source.lines().rev().take(80).collect::<Vec<_>>().into_iter().rev() {
+                println!("{}", line);
+            }
+            panic!("创建内核失败: {}", e);
+        }
+    };
     
     // 执行内核
     unsafe {

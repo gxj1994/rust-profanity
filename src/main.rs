@@ -7,6 +7,8 @@
 
 use clap::Parser;
 use log::info;
+use rand::rngs::OsRng;
+use rand::RngCore;
 use std::io::{self, Write};
 use std::time::{Duration, Instant};
 use std::thread::sleep;
@@ -16,6 +18,21 @@ use rust_profanity::{
     mnemonic::Mnemonic,
     opencl::{OpenCLContext, SearchKernel},
 };
+
+#[derive(clap::ValueEnum, Debug, Clone, Copy)]
+enum SourceModeArg {
+    Mnemonic,
+    PrivateKey,
+}
+
+impl From<SourceModeArg> for SourceMode {
+    fn from(value: SourceModeArg) -> Self {
+        match value {
+            SourceModeArg::Mnemonic => SourceMode::MnemonicEntropy,
+            SourceModeArg::PrivateKey => SourceMode::PrivateKey,
+        }
+    }
+}
 
 /// 命令行参数
 #[derive(Parser, Debug)]
@@ -55,6 +72,10 @@ struct Args {
     /// 超时时间 (秒，0表示无超时)
     #[arg(long, default_value = "0")]
     timeout: u64,
+
+    /// 地址搜索来源模式: mnemonic(助记词) / private-key(直接私钥)
+    #[arg(long, value_enum, default_value = "mnemonic")]
+    source_mode: SourceModeArg,
 }
 
 /// 解析搜索条件
@@ -146,6 +167,15 @@ fn clear_progress_line() {
     io::stdout().flush().unwrap();
 }
 
+fn random_nonzero_seed() -> [u8; 32] {
+    let mut seed = [0u8; 32];
+    OsRng.fill_bytes(&mut seed);
+    if seed.iter().all(|&b| b == 0) {
+        seed[31] = 1;
+    }
+    seed
+}
+
 /// 主函数
 fn main() -> anyhow::Result<()> {
     // 初始化日志
@@ -157,11 +187,20 @@ fn main() -> anyhow::Result<()> {
     info!("启动 GPU以太坊靓号地址搜索系统");
     info!("参数: {:?}", args);
     
-    // 1. 生成随机熵种子
-    info!("生成随机熵种子...");
-    let base_mnemonic = Mnemonic::generate_random()?;
-    let (base_entropy, _) = base_mnemonic.to_entropy();
-    info!("搜索空间: {} 个线程从随机熵开始并行遍历", args.threads);
+    let source_mode: SourceMode = args.source_mode.into();
+    
+    // 1. 生成随机种子
+    let base_seed = random_nonzero_seed();
+    match source_mode {
+        SourceMode::MnemonicEntropy => {
+            info!("来源模式: 助记词熵派生");
+            info!("搜索空间: {} 个线程从随机熵开始并行遍历", args.threads);
+        }
+        SourceMode::PrivateKey => {
+            info!("来源模式: 直接私钥遍历");
+            info!("搜索空间: {} 个线程从随机私钥开始并行遍历", args.threads);
+        }
+    }
     
     // 2. 解析搜索条件
     let (condition, pattern_config) = parse_condition(&args)?;
@@ -179,18 +218,14 @@ fn main() -> anyhow::Result<()> {
     let mut search_kernel = SearchKernel::new(&ctx, &kernel_source, args.threads as usize)?;
     
     // 5. 准备配置数据
-    // 验证助记词校验和
-    let (_, checksum_valid) = base_mnemonic.to_entropy();
-    if !checksum_valid {
-        log::warn!("基础助记词校验和验证失败，继续执行...");
-    }
-    
     // 根据是否有模式匹配创建配置
     let config = if let Some(pattern) = pattern_config {
-        SearchConfig::new_with_pattern(base_entropy, args.threads, condition, pattern)
+        SearchConfig::new_with_pattern(base_seed, args.threads, condition, pattern)
     } else {
-        SearchConfig::new(base_entropy, args.threads, condition)
-    };
+        SearchConfig::new(base_seed, args.threads, condition)
+    }
+    .with_source_mode(source_mode)
+    .with_target_chain(TargetChain::Ethereum);
     search_kernel.set_config(&config)?;
     
     // 6. 启动内核
@@ -266,11 +301,19 @@ fn main() -> anyhow::Result<()> {
         println!("✓ 找到符合条件的地址!");
         println!("========================================");
         println!("以太坊地址: 0x{}", hex::encode(result.eth_address));
-        
-        // 从熵生成助记词，确保校验和正确
-        let mnemonic = Mnemonic::from_entropy(&result.result_entropy)
-            .expect("从熵生成助记词失败");
-        println!("助记词: {}", mnemonic);
+
+        match source_mode {
+            SourceMode::MnemonicEntropy => {
+                // 从熵生成助记词，确保校验和正确
+                let mnemonic = Mnemonic::from_entropy(&result.result_seed)
+                    .expect("从熵生成助记词失败");
+                println!("助记词: {}", mnemonic);
+            }
+            SourceMode::PrivateKey => {
+                println!("私钥: 0x{}", hex::encode(result.result_seed));
+            }
+        }
+
         println!("找到线程: {}", result.found_by_thread);
     } else if !found && is_timeout {
         println!("✗ 搜索超时 ({} 秒) - 强制终止", timeout_secs);
@@ -329,6 +372,7 @@ mod tests {
             work_group_size: 256,
             poll_interval: 100,
             timeout: 0,
+            source_mode: SourceModeArg::Mnemonic,
         };
         
         let (condition, _) = parse_condition(&args).unwrap();
@@ -347,6 +391,7 @@ mod tests {
             work_group_size: 128,
             poll_interval: 250,
             timeout: 0,
+            source_mode: SourceModeArg::Mnemonic,
         };
         
         let result = parse_condition(&args);
