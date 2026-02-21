@@ -33,37 +33,73 @@ typedef struct {
 } local_mnemonic_t;
 
 // 函数前置声明
-void get_ethereum_private_key_local(const local_mnemonic_t* mnemonic, uchar private_key[32]);
-void entropy_to_mnemonic(const uchar entropy[32], ushort words[24]);
-bool increment_entropy(uchar entropy[32], uint step);
+inline void get_ethereum_private_key_local(const local_mnemonic_t* mnemonic, uchar private_key[32]);
+inline bool increment_entropy(uchar entropy[32], uint step);
 
 // 从熵生成以太坊地址
 // 流程: 熵 -> 助记词 -> 种子 -> 私钥 -> 公钥 -> Keccak-256 -> 地址
-void derive_address_from_entropy(const uchar entropy[32], uchar address[20]) {
-    // 1. 熵 -> 助记词 (符合 BIP39 标准，包含正确校验和)
-    ushort words[24];
-    entropy_to_mnemonic(entropy, words);
+// 优化: entropy_to_mnemonic 逻辑已内联，减少函数调用开销
+inline void derive_address_from_entropy(const uchar entropy[32], uchar address[20]) {
+    // ===== 内联 entropy_to_mnemonic 开始 =====
+    // 计算校验和: SHA256 的前 8 位 (256/32 = 8)
+    uchar hash_checksum[32];
+    sha256(entropy, 32, hash_checksum);
+    uchar checksum_bits = hash_checksum[0]; // 取前8位
     
-    // 2. 构建 local_mnemonic_t (使用 ushort 逐个复制，避免对齐问题)
+    // 组合: 256位熵 + 8位校验和 = 264位
+    // 将数据视为大端序的位流
+    uchar all_bits[33];
+    // 使用 uchar16 向量类型批量复制 32 字节
+    uchar16* bits16 = (uchar16*)all_bits;
+    const uchar16* ent16 = (const uchar16*)entropy;
+    bits16[0] = ent16[0];
+    bits16[1] = ent16[1];
+    all_bits[32] = checksum_bits;
+    
+    // 提取24个11位索引 - 优化版本
+    // 使用 64 位加载减少内存访问
+    ushort words[24];
+    for (int i = 0; i < 24; i++) {
+        int bit_offset = i * 11;
+        int byte_idx = bit_offset >> 3;  // / 8
+        int bit_shift = bit_offset & 7;  // % 8
+        
+        // 安全加载最多 3 个字节到 32 位整数
+        // 避免越界：all_bits 只有 33 字节 (索引 0-32)
+        uint val = ((uint)all_bits[byte_idx] << 24);
+        if (byte_idx + 1 < 33) {
+            val |= ((uint)all_bits[byte_idx + 1] << 16);
+        }
+        if (byte_idx + 2 < 33) {
+            val |= ((uint)all_bits[byte_idx + 2] << 8);
+        }
+        
+        // 提取 11 位 (从大端序)
+        val = val << bit_shift;
+        words[i] = (ushort)((val >> 21) & 0x7FF);  // 21 = 32 - 11
+    }
+    // ===== 内联 entropy_to_mnemonic 结束 =====
+    
+    // 构建 local_mnemonic_t (使用 ushort 逐个复制，避免对齐问题)
     local_mnemonic_t mn;
     // 24 * 2 = 48 bytes，逐个复制避免未对齐访问
     for (int i = 0; i < 24; i++) {
         mn.words[i] = words[i];
     }
     
-    // 3. 助记词 -> 私钥 (BIP39 + BIP32)
+    // 助记词 -> 私钥 (BIP39 + BIP32)
     uchar private_key[32];
     get_ethereum_private_key_local(&mn, private_key);
     
-    // 4. 私钥 -> 公钥 (secp256k1)
+    // 私钥 -> 公钥 (secp256k1)
     uchar public_key[65];
     private_to_public(private_key, public_key);
     
-    // 5. 公钥 -> Keccak-256 哈希 (跳过 0x04 前缀)
+    // 公钥 -> Keccak-256 哈希 (跳过 0x04 前缀)
     uchar hash[32];
     keccak256(public_key + 1, 64, hash);
     
-    // 6. 取后 20 字节作为以太坊地址 (使用 ulong + uint 批量复制)
+    // 取后 20 字节作为以太坊地址 (使用 ulong + uint 批量复制)
     *((ulong*)address) = *((ulong*)(hash + 12));
     *((ulong*)(address + 8)) = *((ulong*)(hash + 20));
     *((uint*)(address + 16)) = *((uint*)(hash + 28));

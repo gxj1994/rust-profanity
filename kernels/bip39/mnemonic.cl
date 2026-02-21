@@ -29,7 +29,7 @@ __constant uint DERIVATION_PATH[5] = {
 // 将助记词转换为标准BIP39字符串
 // 单词之间用空格分隔
 // 返回字符串长度
-uchar mnemonic_to_string(const mnemonic_t* mnemonic, uchar* output, uchar max_len) {
+inline uchar mnemonic_to_string(const mnemonic_t* mnemonic, uchar* output, uchar max_len) {
     uchar pos = 0;
     
     for (int i = 0; i < 24; i++) {
@@ -53,7 +53,7 @@ uchar mnemonic_to_string(const mnemonic_t* mnemonic, uchar* output, uchar max_le
 // password: 助记词字符串 (单词之间用空格分隔)
 // salt: "mnemonic" + 可选密码
 // 迭代次数: 2048
-void mnemonic_to_seed(const mnemonic_t* mnemonic, seed_t* seed) {
+inline void mnemonic_to_seed(const mnemonic_t* mnemonic, seed_t* seed) {
     // 构建助记词字符串 (最大约 24 * 8 + 23 = 215 字节)
     uchar password[256];
     // 使用局部初始化，只清零需要的部分
@@ -68,7 +68,7 @@ void mnemonic_to_seed(const mnemonic_t* mnemonic, seed_t* seed) {
 
 // 从种子生成主密钥 (BIP32)
 // 返回 64 字节: 前 32 字节是主私钥，后 32 字节是主链码
-void seed_to_master_key(const seed_t* seed, uchar master_key[64]) {
+inline void seed_to_master_key(const seed_t* seed, uchar master_key[64]) {
     const uchar key[] = {'B', 'i', 't', 'c', 'o', 'i', 'n', ' ', 's', 'e', 'e', 'd'};
     hmac_sha512(key, 12, seed->bytes, 64, master_key);
 }
@@ -85,7 +85,7 @@ __constant mp_word SECP256K1_N_MNEMONIC[8] = {
 };
 
 // 比较 mp_number (从高位到低位比较)
-int mp_cmp_n(const mp_number* a, const mp_number* b) {
+inline int mp_cmp_n(const mp_number* a, const mp_number* b) {
     for (int i = 7; i >= 0; i--) {
         if (a->d[i] < b->d[i]) return -1;
         if (a->d[i] > b->d[i]) return 1;
@@ -95,7 +95,7 @@ int mp_cmp_n(const mp_number* a, const mp_number* b) {
 
 // 模加: result = (a + b) mod n
 // 使用 secp256k1.cl 中的 mp_mod_add，但需要针对 n 而不是 p
-void mod_add_n_mnemonic(const mp_number* a, const mp_number* b, mp_number* result) {
+inline void mod_add_n_mnemonic(const mp_number* a, const mp_number* b, mp_number* result) {
     // 先执行普通加法
     mp_number temp_result;
     mp_word carry = 0;
@@ -136,7 +136,7 @@ void mod_add_n_mnemonic(const mp_number* a, const mp_number* b, mp_number* resul
 // parent_key: 64 字节 (32 字节私钥 + 32 字节链码)
 // index: 派生索引 (>= 0x80000000 表示硬化派生)
 // child_key: 输出 64 字节
-void derive_child_key(const uchar parent_key[64], uint index, uchar child_key[64]) {
+inline void derive_child_key(const uchar parent_key[64], uint index, uchar child_key[64]) {
     uchar data[37];
     
     if (index >= 0x80000000) {
@@ -215,7 +215,7 @@ void derive_child_key(const uchar parent_key[64], uint index, uchar child_key[64
 }
 
 // 完整的派生路径
-void derive_path(const seed_t* seed, __constant const uint* path, uint path_len, uchar private_key[32]) {
+inline void derive_path(const seed_t* seed, __constant const uint* path, uint path_len, uchar private_key[32]) {
     uchar current_key[64];
     seed_to_master_key(seed, current_key);
     
@@ -231,7 +231,7 @@ void derive_path(const seed_t* seed, __constant const uint* path, uint path_len,
 }
 
 // 获取以太坊私钥 (标准派生路径 m/44'/60'/0'/0/0)
-void get_ethereum_private_key(const mnemonic_t* mnemonic, uchar private_key[32]) {
+inline void get_ethereum_private_key(const mnemonic_t* mnemonic, uchar private_key[32]) {
     seed_t seed;
     mnemonic_to_seed(mnemonic, &seed);
     
@@ -240,7 +240,7 @@ void get_ethereum_private_key(const mnemonic_t* mnemonic, uchar private_key[32])
 }
 
 // 兼容接口: local_mnemonic_t 类型在 search.cl 中定义
-void get_ethereum_private_key_local(const local_mnemonic_t* mnemonic, uchar private_key[32]) {
+inline void get_ethereum_private_key_local(const local_mnemonic_t* mnemonic, uchar private_key[32]) {
     mnemonic_t mn;
     for (int i = 0; i < 24; i++) {
         mn.words[i] = mnemonic->words[i];

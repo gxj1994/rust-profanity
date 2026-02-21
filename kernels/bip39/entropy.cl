@@ -4,7 +4,7 @@
 // 从 256 位熵生成助记词 (符合 BIP39 标准) - 优化版本
 // entropy: 32 字节熵输入
 // mnemonic: 输出的助记词结构 (24 个单词索引)
-void entropy_to_mnemonic(const uchar entropy[32], ushort words[24]) {
+inline void entropy_to_mnemonic(const uchar entropy[32], ushort words[24]) {
     // 计算校验和: SHA256 的前 8 位 (256/32 = 8)
     uchar hash[32];
     sha256(entropy, 32, hash);
@@ -47,7 +47,7 @@ void entropy_to_mnemonic(const uchar entropy[32], ushort words[24]) {
 // words: 24 个单词索引
 // entropy: 输出的 32 字节熵
 // 返回: 校验和是否有效
-bool mnemonic_to_entropy(const ushort words[24], uchar entropy[32]) {
+inline bool mnemonic_to_entropy(const ushort words[24], uchar entropy[32]) {
     // 从单词索引重建位流
     uchar all_bits[33];
     for (int i = 0; i < 33; i++) {
@@ -85,7 +85,7 @@ bool mnemonic_to_entropy(const ushort words[24], uchar entropy[32]) {
 
 // 熵递增 - 按步长递增熵值
 // 返回 false 表示溢出
-bool increment_entropy(uchar entropy[32], uint step) {
+inline bool increment_entropy(uchar entropy[32], uint step) {
     uint carry = step;
     
     // 从最后一个字节开始进位 (小端序处理)
