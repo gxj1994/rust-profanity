@@ -91,28 +91,12 @@ ulong gamma1_64(ulong x) {
     return rotr64(x, 19) ^ rotr64(x, 61) ^ (x >> 6);
 }
 
-// SHA-512 压缩函数
+// SHA-512 压缩函数 - 使用16元素环形缓冲区优化
 void sha512_compress(ulong state[8], const uchar block[128]) {
-    ulong W[80];
+    ulong W[16];  // 环形缓冲区，仅保留最近16个W值
     ulong a, b, c, d, e, f, g, h;
     ulong T1, T2;
-    
-    // 准备消息调度 - 大端序加载
-    for (uint i = 0; i < 16; i++) {
-        uint offset = i * 8;
-        W[i] = ((ulong)block[offset] << 56) |
-               ((ulong)block[offset + 1] << 48) |
-               ((ulong)block[offset + 2] << 40) |
-               ((ulong)block[offset + 3] << 32) |
-               ((ulong)block[offset + 4] << 24) |
-               ((ulong)block[offset + 5] << 16) |
-               ((ulong)block[offset + 6] << 8) |
-               ((ulong)block[offset + 7]);
-    }
-    
-    for (uint i = 16; i < 80; i++) {
-        W[i] = gamma1_64(W[i - 2]) + W[i - 7] + gamma0_64(W[i - 15]) + W[i - 16];
-    }
+    ulong wi;
     
     // 初始化工作变量
     a = state[0];
@@ -124,9 +108,39 @@ void sha512_compress(ulong state[8], const uchar block[128]) {
     g = state[6];
     h = state[7];
     
-    // 主循环
-    for (uint i = 0; i < 80; i++) {
-        T1 = h + sigma1_64(e) + ch64(e, f, g) + SHA512_K[i] + W[i];
+    // 主循环：前16轮直接加载消息块
+    for (uint i = 0; i < 16; i++) {
+        uint offset = i * 8;
+        wi = ((ulong)block[offset] << 56) |
+             ((ulong)block[offset + 1] << 48) |
+             ((ulong)block[offset + 2] << 40) |
+             ((ulong)block[offset + 3] << 32) |
+             ((ulong)block[offset + 4] << 24) |
+             ((ulong)block[offset + 5] << 16) |
+             ((ulong)block[offset + 6] << 8) |
+             ((ulong)block[offset + 7]);
+        W[i] = wi;
+        
+        T1 = h + sigma1_64(e) + ch64(e, f, g) + SHA512_K[i] + wi;
+        T2 = sigma0_64(a) + maj64(a, b, c);
+        h = g;
+        g = f;
+        f = e;
+        e = d + T1;
+        d = c;
+        c = b;
+        b = a;
+        a = T1 + T2;
+    }
+    
+    // 主循环：第16-79轮，使用环形缓冲区计算W值
+    for (uint i = 16; i < 80; i++) {
+        // W[i] = gamma1_64(W[i-2]) + W[i-7] + gamma0_64(W[i-15]) + W[i-16]
+        // 使用环形缓冲区索引：idx = i % 16
+        wi = gamma1_64(W[(i - 2) & 15]) + W[(i - 7) & 15] + gamma0_64(W[(i - 15) & 15]) + W[(i - 16) & 15];
+        W[i & 15] = wi;
+        
+        T1 = h + sigma1_64(e) + ch64(e, f, g) + SHA512_K[i] + wi;
         T2 = sigma0_64(a) + maj64(a, b, c);
         h = g;
         g = f;

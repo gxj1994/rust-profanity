@@ -64,24 +64,12 @@ uint gamma1(uint x) {
     return rotr(x, 17) ^ rotr(x, 19) ^ (x >> 10);
 }
 
-// SHA-256 压缩函数
+// SHA-256 压缩函数 - 使用16元素环形缓冲区优化
 void sha256_compress(uint state[8], const uchar block[64]) {
-    uint W[64];
+    uint W[16];  // 环形缓冲区，仅保留最近16个W值
     uint a, b, c, d, e, f, g, h;
     uint T1, T2;
-    
-    // 准备消息调度 - 大端序加载
-    for (uint i = 0; i < 16; i++) {
-        uint offset = i * 4;
-        W[i] = ((uint)block[offset] << 24) |
-               ((uint)block[offset + 1] << 16) |
-               ((uint)block[offset + 2] << 8) |
-               ((uint)block[offset + 3]);
-    }
-    
-    for (uint i = 16; i < 64; i++) {
-        W[i] = gamma1(W[i - 2]) + W[i - 7] + gamma0(W[i - 15]) + W[i - 16];
-    }
+    uint wi;
     
     // 初始化工作变量
     a = state[0];
@@ -93,9 +81,35 @@ void sha256_compress(uint state[8], const uchar block[64]) {
     g = state[6];
     h = state[7];
     
-    // 主循环
-    for (uint i = 0; i < 64; i++) {
-        T1 = h + sigma1(e) + ch(e, f, g) + SHA256_K[i] + W[i];
+    // 主循环：前16轮直接加载消息块
+    for (uint i = 0; i < 16; i++) {
+        uint offset = i * 4;
+        wi = ((uint)block[offset] << 24) |
+             ((uint)block[offset + 1] << 16) |
+             ((uint)block[offset + 2] << 8) |
+             ((uint)block[offset + 3]);
+        W[i] = wi;
+        
+        T1 = h + sigma1(e) + ch(e, f, g) + SHA256_K[i] + wi;
+        T2 = sigma0(a) + maj(a, b, c);
+        h = g;
+        g = f;
+        f = e;
+        e = d + T1;
+        d = c;
+        c = b;
+        b = a;
+        a = T1 + T2;
+    }
+    
+    // 主循环：第16-63轮，使用环形缓冲区计算W值
+    for (uint i = 16; i < 64; i++) {
+        // W[i] = gamma1(W[i-2]) + W[i-7] + gamma0(W[i-15]) + W[i-16]
+        // 使用环形缓冲区索引：idx = i % 16
+        wi = gamma1(W[(i - 2) & 15]) + W[(i - 7) & 15] + gamma0(W[(i - 15) & 15]) + W[(i - 16) & 15];
+        W[i & 15] = wi;
+        
+        T1 = h + sigma1(e) + ch(e, f, g) + SHA256_K[i] + wi;
         T2 = sigma0(a) + maj(a, b, c);
         h = g;
         g = f;
