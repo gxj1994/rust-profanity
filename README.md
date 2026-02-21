@@ -38,9 +38,37 @@ sudo apt-get install ocl-icd-opencl-dev
 
 ## 编译安装
 
+### 从 GitHub 安装
+
+```bash
+# 使用 cargo install 直接从 GitHub 安装
+cargo install --git https://github.com/gxj1994/rust-profanity.git
+
+# 安装后可直接使用
+rust-profanity --help
+```
+
+### 作为项目依赖
+
+在 `Cargo.toml` 中添加：
+
+```toml
+[dependencies]
+rust-profanity = { git = "https://github.com/gxj1994/rust-profanity" }
+```
+
+或使用特定版本：
+
+```toml
+[dependencies]
+rust-profanity = { git = "https://github.com/gxj1994/rust-profanity", branch = "main" }
+```
+
+### 从源码编译
+
 ```bash
 # 克隆仓库
-git clone <repository-url>
+git clone https://github.com/gxj1994/rust-profanity.git
 cd rust-profanity
 
 # 编译 Release 版本
