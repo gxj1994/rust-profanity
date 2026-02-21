@@ -19,7 +19,8 @@ typedef struct {
     uchar result_entropy[32];  // 找到的熵 (32字节)，由 Rust 端转换为助记词
     uchar eth_address[20];
     uint found_by_thread;
-    ulong total_checked;       // 总共检查的地址数量 (所有线程累加)
+    uint total_checked_low;    // 总共检查的地址数量 - 低32位
+    uint total_checked_high;   // 总共检查的地址数量 - 高32位
 } search_result_t;
 
 // 本地助记词结构 (与 mnemonic.cl 中的定义保持一致)
@@ -66,6 +67,25 @@ void derive_address_from_entropy(const uchar entropy[32], uchar address[20]) {
     *((uint*)(address + 16)) = *((uint*)(hash + 28));
 }
 
+// 辅助函数：原子读取 32 位标志
+inline int atomic_load_flag(__global int* flag) {
+    return atomic_add(flag, 0);
+}
+
+// 辅助函数：原子累加 64 位计数器 (拆分为两个 32 位)
+inline void atom_add_64(__global uint* low, __global uint* high, ulong value) {
+    uint old_low = atom_add(low, (uint)value);
+    // 检查是否溢出
+    if (old_low > (old_low + (uint)value)) {
+        atom_add(high, 1);
+    }
+    // 处理高32位
+    uint high_val = (uint)(value >> 32);
+    if (high_val > 0) {
+        atom_add(high, high_val);
+    }
+}
+
 // 主搜索内核
 __kernel void search_kernel(
     __constant search_config_t* config,
@@ -92,10 +112,18 @@ __kernel void search_kernel(
     }
     
     uint counter = 0;
-    ulong local_checked = 0;
+    uint local_checked_low = 0;
+    uint local_checked_high = 0;
     
-    while (!(*g_found_flag)) {
-        local_checked++;
+    // 使用原子操作读取标志，避免编译器优化
+    int flag = atomic_load_flag(g_found_flag);
+    while (!flag) {
+        // 增加本地计数器 (使用 64 位模拟)
+        local_checked_low++;
+        if (local_checked_low == 0) {
+            local_checked_high++;
+        }
+        
         // 从熵生成以太坊地址 (自动包含正确的 BIP39 校验和)
         uchar address[20];
         derive_address_from_entropy(local_entropy, address);
@@ -130,15 +158,21 @@ __kernel void search_kernel(
         
         // 定期检测全局标志并更新统计
         if ((++counter & (config->check_interval - 1)) == 0) {
-            if (*g_found_flag) break;
-            // 原子累加本线程检查的地址数
-            atom_add(&result->total_checked, local_checked);
-            local_checked = 0;
+            flag = atomic_load_flag(g_found_flag);
+            if (flag) break;
+            // 原子累加本线程检查的地址数 (64 位拆分)
+            if (local_checked_low > 0 || local_checked_high > 0) {
+                ulong local_checked = ((ulong)local_checked_high << 32) | local_checked_low;
+                atom_add_64(&result->total_checked_low, &result->total_checked_high, local_checked);
+                local_checked_low = 0;
+                local_checked_high = 0;
+            }
         }
     }
     
     // 最后累加剩余的计数
-    if (local_checked > 0) {
-        atom_add(&result->total_checked, local_checked);
+    if (local_checked_low > 0 || local_checked_high > 0) {
+        ulong local_checked = ((ulong)local_checked_high << 32) | local_checked_low;
+        atom_add_64(&result->total_checked_low, &result->total_checked_high, local_checked);
     }
 }

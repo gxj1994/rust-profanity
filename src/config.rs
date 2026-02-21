@@ -31,7 +31,7 @@ impl SearchConfig {
 /// 搜索结果 (从 GPU 传回)
 /// 注意：必须与 OpenCL 的 search_result_t 结构体完全匹配
 #[repr(C)]
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy)]
 pub struct SearchResult {
     /// 是否找到 (0/1) - 对应 OpenCL int
     pub found: i32,
@@ -42,8 +42,30 @@ pub struct SearchResult {
     pub eth_address: [u8; 20],
     /// 由哪个线程找到 - 对应 OpenCL uint
     pub found_by_thread: u32,
-    /// 总共检查的地址数量 - 对应 OpenCL ulong
-    pub total_checked: u64,
+    /// 总共检查的地址数量 - 低32位 - 对应 OpenCL uint
+    pub total_checked_low: u32,
+    /// 总共检查的地址数量 - 高32位 - 对应 OpenCL uint
+    pub total_checked_high: u32,
+}
+
+impl Default for SearchResult {
+    fn default() -> Self {
+        Self {
+            found: 0,
+            result_entropy: [0u8; 32],
+            eth_address: [0u8; 20],
+            found_by_thread: 0,
+            total_checked_low: 0,
+            total_checked_high: 0,
+        }
+    }
+}
+
+impl SearchResult {
+    /// 获取总共检查的地址数量 (64位)
+    pub fn total_checked(&self) -> u64 {
+        ((self.total_checked_high as u64) << 32) | (self.total_checked_low as u64)
+    }
 }
 
 /// 条件类型
@@ -180,9 +202,22 @@ mod tests {
         println!("SearchConfig size: {}", config_size);
         assert!(config_size >= 48, "SearchConfig too small");
 
-        // OpenCL: typedef struct { int; uchar[32]; uchar[20]; uint; } = 4 + 32 + 20 + 4 = 60 (可能有填充)
+        // OpenCL: typedef struct { int; uchar[32]; uchar[20]; uint; uint; uint; } = 4 + 32 + 20 + 4 + 4 + 4 = 68 (可能有填充)
         let result_size = std::mem::size_of::<SearchResult>();
         println!("SearchResult size: {}", result_size);
-        assert!(result_size >= 60, "SearchResult too small");
+        assert!(result_size >= 68, "SearchResult too small");
+    }
+
+    #[test]
+    fn test_total_checked() {
+        let result = SearchResult {
+            found: 0,
+            result_entropy: [0u8; 32],
+            eth_address: [0u8; 20],
+            found_by_thread: 0,
+            total_checked_low: 0x12345678,
+            total_checked_high: 0x9ABCDEF0,
+        };
+        assert_eq!(result.total_checked(), 0x9ABCDEF012345678);
     }
 }

@@ -206,7 +206,7 @@ fn main() -> anyhow::Result<()> {
             // 使用非阻塞方式读取结果，避免阻塞主线程
             let result = search_kernel.read_result_nonblock().ok();
             if let Some(r) = result {
-                let checked = r.total_checked;
+                let checked = r.total_checked();
                 let speed = if elapsed > 0.0 { checked as f64 / elapsed } else { 0.0 };
                 info!(
                     "搜索中... 已运行 {:.1} 秒 | 已检查 {} 个地址 | 速度 {:.0} 地址/秒",
@@ -225,13 +225,7 @@ fn main() -> anyhow::Result<()> {
     let is_timeout = timeout_enabled && start_time.elapsed().as_secs() >= timeout_secs;
     let result = if !found && is_timeout {
         // 超时情况下，尝试非阻塞读取，如果失败则使用默认值
-        search_kernel.read_result_nonblock().unwrap_or_else(|_| SearchResult {
-            found: 0,
-            result_entropy: [0u8; 32],
-            eth_address: [0u8; 20],
-            found_by_thread: 0,
-            total_checked: 0,
-        })
+        search_kernel.read_result_nonblock().unwrap_or_default()
     } else {
         search_kernel.read_result()?
     };
@@ -242,7 +236,7 @@ fn main() -> anyhow::Result<()> {
     println!("========================================");
     
     // 计算统计信息
-    let total_checked = result.total_checked;
+    let total_checked = result.total_checked();
     let speed = if elapsed.as_secs_f64() > 0.0 {
         total_checked as f64 / elapsed.as_secs_f64()
     } else {

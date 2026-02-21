@@ -189,15 +189,17 @@ mp_word mp_add_more(mp_number * const r, mp_word * const extraR, const mp_number
 }
 
 // 多精度大于等于 (>=) 操作符
+// 注意：此实现使用位掩码方式，适用于二进制扩展欧几里得算法中的比较
+// 在 mp_mod_inverse 中，它用于比较两个数的大小关系
 mp_word mp_gte(const mp_number * const a, const mp_number * const b) {
-	mp_word l = 0, g = 0;
+    mp_word l = 0, g = 0;
 
-	for (mp_word i = 0; i < MP_WORDS; ++i) {
-		if (a->d[i] < b->d[i]) l |= (1 << i);
-		if (a->d[i] > b->d[i]) g |= (1 << i);
-	}
+    for (mp_word i = 0; i < MP_WORDS; ++i) {
+        if (a->d[i] < b->d[i]) l |= (1 << i);
+        if (a->d[i] > b->d[i]) g |= (1 << i);
+    }
 
-	return g >= l;
+    return g >= l;
 }
 
 // 右移一位，带额外字
