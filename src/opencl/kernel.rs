@@ -19,6 +19,10 @@ pub struct SearchKernel {
     result_buffer: Buffer<u8>,
     /// 全局标志缓冲区
     flag_buffer: Buffer<i32>,
+    /// 每线程最终检查次数缓冲区
+    thread_checked_buffer: Buffer<u64>,
+    /// 每线程缓冲区长度
+    thread_checked_len: usize,
     /// 非阻塞读取 found 标志的主机缓冲
     flag_read_buf: Vec<i32>,
     /// 非阻塞读取 found 标志的事件
@@ -31,7 +35,7 @@ impl SearchKernel {
     /// # Arguments
     /// * `ctx` - OpenCL 上下文
     /// * `kernel_source` - OpenCL C 内核源代码
-    pub fn new(ctx: &OpenCLContext, kernel_source: &str) -> anyhow::Result<Self> {
+    pub fn new(ctx: &OpenCLContext, kernel_source: &str, thread_checked_len: usize) -> anyhow::Result<Self> {
         info!("Building OpenCL program...");
         
         // 编译程序
@@ -59,6 +63,12 @@ impl SearchKernel {
             .flags(ocl::flags::MEM_READ_WRITE)
             .len(1)
             .build()?;
+
+        let thread_checked_buffer = Buffer::<u64>::builder()
+            .queue(ctx.queue.clone())
+            .flags(ocl::flags::MEM_READ_WRITE)
+            .len(thread_checked_len)
+            .build()?;
         
         // 初始化标志为 0
         let initial_flag: Vec<i32> = vec![0];
@@ -73,6 +83,7 @@ impl SearchKernel {
             .arg(&config_buffer)
             .arg(&result_buffer)
             .arg(&flag_buffer)
+            .arg(&thread_checked_buffer)
             .build()?;
         
         Ok(Self {
@@ -81,6 +92,8 @@ impl SearchKernel {
             config_buffer,
             result_buffer,
             flag_buffer,
+            thread_checked_buffer,
+            thread_checked_len,
             flag_read_buf: vec![0],
             flag_read_event: None,
         })
@@ -112,6 +125,10 @@ impl SearchKernel {
         // 只设置全局工作大小，让 OpenCL 自动选择合适的工作组大小
         let gws = SpatialDims::One(global_work_size);
         
+        // 清空每线程计数缓冲区，避免残留
+        let zero_counts = vec![0u64; self.thread_checked_len];
+        self.thread_checked_buffer.write(&zero_counts).enq()?;
+
         unsafe {
             self.kernel.cmd()
                 .global_work_size(gws)
@@ -119,6 +136,15 @@ impl SearchKernel {
         }
         
         Ok(())
+    }
+
+    /// 读取总检查次数（主机侧对每线程计数求和）
+    pub fn read_total_checked(&self, active_threads: usize) -> anyhow::Result<u64> {
+        let n = active_threads.min(self.thread_checked_len);
+        let mut counts = vec![0u64; n];
+        self.thread_checked_buffer.read(&mut counts).enq()?;
+        let total: u128 = counts.into_iter().map(|v| v as u128).sum();
+        Ok(total.min(u64::MAX as u128) as u64)
     }
     
     /// 非阻塞轮询 found 标志

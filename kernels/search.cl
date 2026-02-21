@@ -93,36 +93,19 @@ inline int atomic_load_flag(__global int* flag) {
     return atomic_add(flag, 0);
 }
 
-// 辅助函数：原子累加 64 位计数器 (拆分为两个 32 位)
-// 使用原子操作确保线程安全
-inline void atom_add_64(__global uint* low, __global uint* high, ulong value) {
-    uint low_val = (uint)value;
-    uint high_val = (uint)(value >> 32);
-    
-    // 先更新低32位
-    uint old_low = atom_add(low, low_val);
-    
-    // 计算高32位需要增加的值：
-    // 1. value 本身的高32位 (high_val)
-    // 2. 如果低32位溢出，还需要加1
-    uint carry = (old_low > 0xFFFFFFFFU - low_val) ? 1 : 0;
-    uint high_increment = high_val + carry;
-    
-    // 更新高32位
-    if (high_increment > 0) {
-        atom_add(high, high_increment);
-    }
-}
-
 // 主搜索内核
 __kernel void search_kernel(
     __constant search_config_t* config,
     __global search_result_t* result,
-    __global int* g_found_flag
+    __global int* g_found_flag,
+    __global ulong* thread_checked
 ) {
     uint tid = get_global_id(0);
     
     if (tid >= config->num_threads) return;
+
+    // 默认计数清零，确保提前退出时不会读到垃圾值
+    thread_checked[tid] = 0;
     
     // 复制基础熵到本地内存 (使用 uchar16 向量类型优化)
     uchar local_entropy[32];
@@ -198,21 +181,9 @@ __kernel void search_kernel(
             if (flag) break;
         }
         
-        // 定期更新统计到全局内存 (使用 config->check_interval)
-        if ((counter & (config->check_interval - 1)) == 0) {
-            // 原子累加本线程检查的地址数 (64 位拆分)
-            if (local_checked_low > 0 || local_checked_high > 0) {
-                ulong local_checked = ((ulong)local_checked_high << 32) | local_checked_low;
-                atom_add_64(&result->total_checked_low, &result->total_checked_high, local_checked);
-                local_checked_low = 0;
-                local_checked_high = 0;
-            }
-        }
+        // 不再周期性写全局统计，降低原子争用
     }
     
-    // 最后累加剩余的计数
-    if (local_checked_low > 0 || local_checked_high > 0) {
-        ulong local_checked = ((ulong)local_checked_high << 32) | local_checked_low;
-        atom_add_64(&result->total_checked_low, &result->total_checked_high, local_checked);
-    }
+    // 每线程写回自己的最终计数，主机侧统一求和
+    thread_checked[tid] = ((ulong)local_checked_high << 32) | local_checked_low;
 }

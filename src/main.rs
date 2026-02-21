@@ -176,7 +176,7 @@ fn main() -> anyhow::Result<()> {
     info!("加载 OpenCL 内核...");
     // 使用完整版内核 (包含完整加密实现)
     let kernel_source = load_kernel_source()?;
-    let mut search_kernel = SearchKernel::new(&ctx, &kernel_source)?;
+    let mut search_kernel = SearchKernel::new(&ctx, &kernel_source, args.threads as usize)?;
     
     // 5. 准备配置数据
     // 验证助记词校验和
@@ -253,7 +253,9 @@ fn main() -> anyhow::Result<()> {
     println!();
     println!("========================================");
 
-    let total_checked = result.total_checked();
+    let total_checked = search_kernel
+        .read_total_checked(args.threads as usize)
+        .unwrap_or_else(|_| result.total_checked());
     let speed = if elapsed.as_secs_f64() > 0.0 {
         total_checked as f64 / elapsed.as_secs_f64()
     } else {
