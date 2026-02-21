@@ -50,16 +50,6 @@ inline void derive_address_from_entropy(const uchar entropy[32], uchar address[2
     sha256(entropy, 32, hash);
     uchar checksum_bits = hash[0]; // 取前8位
     
-    // 组合: 256位熵 + 8位校验和 = 264位
-    // 将数据视为大端序的位流
-    uchar all_bits[33];
-    // 使用 uchar16 向量类型批量复制 32 字节
-    uchar16* bits16 = (uchar16*)all_bits;
-    const uchar16* ent16 = (const uchar16*)entropy;
-    bits16[0] = ent16[0];
-    bits16[1] = ent16[1];
-    all_bits[32] = checksum_bits;
-    
     // 直接写入 local_mnemonic_t，避免 words[24] 临时数组
     local_mnemonic_t mn;
     for (int i = 0; i < 24; i++) {
@@ -67,15 +57,11 @@ inline void derive_address_from_entropy(const uchar entropy[32], uchar address[2
         int byte_idx = bit_offset >> 3;  // / 8
         int bit_shift = bit_offset & 7;  // % 8
         
-        // 安全加载最多 3 个字节到 32 位整数
-        // 避免越界：all_bits 只有 33 字节 (索引 0-32)
-        uint val = ((uint)all_bits[byte_idx] << 24);
-        if (byte_idx + 1 < 33) {
-            val |= ((uint)all_bits[byte_idx + 1] << 16);
-        }
-        if (byte_idx + 2 < 33) {
-            val |= ((uint)all_bits[byte_idx + 2] << 8);
-        }
+        // 从 entropy(0..31) + checksum(32) 按需读取 3 字节窗口，避免 all_bits[33] 私有缓冲
+        uchar b0 = (byte_idx < 32) ? entropy[byte_idx] : checksum_bits;
+        uchar b1 = (byte_idx + 1 < 32) ? entropy[byte_idx + 1] : ((byte_idx + 1 == 32) ? checksum_bits : (uchar)0);
+        uchar b2 = (byte_idx + 2 < 32) ? entropy[byte_idx + 2] : ((byte_idx + 2 == 32) ? checksum_bits : (uchar)0);
+        uint val = ((uint)b0 << 24) | ((uint)b1 << 16) | ((uint)b2 << 8);
         
         // 提取 11 位 (从大端序)
         val = val << bit_shift;
