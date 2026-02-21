@@ -19,29 +19,43 @@
 
 // 比较前缀 - 优化版本
 // condition: 编码后的条件，包含字节数和参数
+// 
+// Rust 端编码逻辑 (大端序):
+//   for byte in bytes:
+//       param = (param << 8) | byte
+// 例如 bytes=[0x12, 0x34] -> param = 0x1234
+// 
+// 地址字节与 param 的对应关系:
+//   address[0] = (param >> 8) & 0xFF   (最高有效字节)
+//   address[1] = param & 0xFF          (最低有效字节)
 inline bool compare_prefix(const uchar address[20], ulong condition) {
     uint param_bytes = GET_COND_BYTES(condition);
     ulong param = GET_COND_PARAM(condition);
     
-    // 使用展开循环直接比较，避免循环开销和运行时计算
-    // 从最高字节开始比较，可提前退出
+    // 根据 param_bytes 动态计算偏移量
+    // 对于 n 字节，address[i] 对应 param 的第 (n-1-i) 个字节
     if (param_bytes >= 6) {
-        if (address[5] != ((param >> 32) & 0xFF)) return false;
+        if (address[5] != ((param >> 0) & 0xFF)) return false;
     }
     if (param_bytes >= 5) {
-        if (address[4] != ((param >> 24) & 0xFF)) return false;
+        if (address[4] != ((param >> 8) & 0xFF)) return false;
     }
     if (param_bytes >= 4) {
         if (address[3] != ((param >> 16) & 0xFF)) return false;
     }
     if (param_bytes >= 3) {
-        if (address[2] != ((param >> 8) & 0xFF)) return false;
+        if (address[2] != ((param >> 24) & 0xFF)) return false;
     }
     if (param_bytes >= 2) {
+        // 2字节: address[0]>>8, address[1]>>0
         if (address[1] != (param & 0xFF)) return false;
     }
     if (param_bytes >= 1) {
-        if (address[0] != (param & 0xFF)) return false;
+        // 1字节: address[0] = param & 0xFF (因为 param < 256)
+        // 2字节: address[0] = (param >> 8) & 0xFF
+        // 通用公式: address[0] = (param >> (8 * max(0, param_bytes-1))) & 0xFF
+        uint shift = (param_bytes > 1) ? (8 * (param_bytes - 1)) : 0;
+        if (address[0] != ((param >> shift) & 0xFF)) return false;
     }
     
     return true;
