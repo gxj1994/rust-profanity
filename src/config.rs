@@ -177,6 +177,27 @@ pub fn parse_leading_zeros_condition(zeros: u32) -> anyhow::Result<u64> {
     Ok(ConditionType::Leading.encode(zeros as u64))
 }
 
+/// 打印结构体布局信息（用于调试 OpenCL 对齐问题）
+pub fn print_struct_layouts() {
+    use std::mem;
+    
+    println!("=== SearchConfig Layout ===");
+    println!("Total size: {} bytes", mem::size_of::<SearchConfig>());
+    println!("  base_entropy offset: {} bytes", mem::offset_of!(SearchConfig, base_entropy));
+    println!("  num_threads offset: {} bytes", mem::offset_of!(SearchConfig, num_threads));
+    println!("  condition offset: {} bytes", mem::offset_of!(SearchConfig, condition));
+    println!("  check_interval offset: {} bytes", mem::offset_of!(SearchConfig, check_interval));
+    
+    println!("\n=== SearchResult Layout ===");
+    println!("Total size: {} bytes", mem::size_of::<SearchResult>());
+    println!("  found offset: {} bytes", mem::offset_of!(SearchResult, found));
+    println!("  result_entropy offset: {} bytes", mem::offset_of!(SearchResult, result_entropy));
+    println!("  eth_address offset: {} bytes", mem::offset_of!(SearchResult, eth_address));
+    println!("  found_by_thread offset: {} bytes", mem::offset_of!(SearchResult, found_by_thread));
+    println!("  total_checked_low offset: {} bytes", mem::offset_of!(SearchResult, total_checked_low));
+    println!("  total_checked_high offset: {} bytes", mem::offset_of!(SearchResult, total_checked_high));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -206,6 +227,12 @@ mod tests {
         let result_size = std::mem::size_of::<SearchResult>();
         println!("SearchResult size: {}", result_size);
         assert!(result_size >= 68, "SearchResult too small");
+    }
+
+    #[test]
+    fn test_struct_layout() {
+        // 打印结构体布局用于调试
+        print_struct_layouts();
     }
 
     #[test]

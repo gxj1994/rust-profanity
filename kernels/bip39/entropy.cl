@@ -27,10 +27,15 @@ void entropy_to_mnemonic(const uchar entropy[32], ushort words[24]) {
         int byte_idx = bit_offset >> 3;  // / 8
         int bit_shift = bit_offset & 7;  // % 8
         
-        // 加载最多 3 个字节到 32 位整数
-        uint val = ((uint)all_bits[byte_idx] << 24) |
-                   ((uint)all_bits[byte_idx + 1] << 16) |
-                   ((uint)all_bits[byte_idx + 2] << 8);
+        // 安全加载最多 3 个字节到 32 位整数
+        // 避免越界：all_bits 只有 33 字节 (索引 0-32)
+        uint val = ((uint)all_bits[byte_idx] << 24);
+        if (byte_idx + 1 < 33) {
+            val |= ((uint)all_bits[byte_idx + 1] << 16);
+        }
+        if (byte_idx + 2 < 33) {
+            val |= ((uint)all_bits[byte_idx + 2] << 8);
+        }
         
         // 提取 11 位 (从大端序)
         val = val << bit_shift;

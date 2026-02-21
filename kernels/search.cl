@@ -5,12 +5,16 @@
 // 不要在此文件中添加 #include 语句
 
 // 搜索配置结构 (与Rust端对应)
+// Rust 布局: base_entropy[32] @0, num_threads @32, condition @40, check_interval @48
+// 总大小: 56 bytes (包含 4 bytes 填充在末尾)
 // 注意：使用基本类型数组而不是嵌套结构体，避免OpenCL兼容性问题
 typedef struct {
-    uchar base_entropy[32];  // 基础熵 (256位)，而非助记词单词
-    uint num_threads;
-    ulong condition;
-    uint check_interval;
+    uchar base_entropy[32];  // 基础熵 (256位)，而非助记词单词 - offset 0
+    uint num_threads;        // offset 32
+    uchar _padding1[4];      // 填充以对齐 condition 到 8 字节边界
+    ulong condition;         // offset 40
+    uint check_interval;     // offset 48
+    uchar _padding2[4];      // 填充以对齐到 8 字节边界，总大小 56
 } search_config_t;
 
 // 搜索结果结构
@@ -40,14 +44,12 @@ void derive_address_from_entropy(const uchar entropy[32], uchar address[20]) {
     ushort words[24];
     entropy_to_mnemonic(entropy, words);
     
-    // 2. 构建 local_mnemonic_t (使用 ulong 指针批量复制)
+    // 2. 构建 local_mnemonic_t (使用 ushort 逐个复制，避免对齐问题)
     local_mnemonic_t mn;
-    // 24 * 2 = 48 bytes = 6 ulongs
-    ulong* mn_words = (ulong*)mn.words;
-    ulong* src_words = (ulong*)words;
-    mn_words[0] = src_words[0]; mn_words[1] = src_words[1];
-    mn_words[2] = src_words[2]; mn_words[3] = src_words[3];
-    mn_words[4] = src_words[4]; mn_words[5] = src_words[5];
+    // 24 * 2 = 48 bytes，逐个复制避免未对齐访问
+    for (int i = 0; i < 24; i++) {
+        mn.words[i] = words[i];
+    }
     
     // 3. 助记词 -> 私钥 (BIP39 + BIP32)
     uchar private_key[32];
@@ -73,8 +75,7 @@ inline int atomic_load_flag(__global int* flag) {
 }
 
 // 辅助函数：原子累加 64 位计数器 (拆分为两个 32 位)
-// 注意：此函数使用原子操作分别更新低32位和高32位
-// 由于是两个独立的原子操作，计数可能不是完全精确的，但对于统计目的是足够的
+// 使用原子操作确保线程安全
 inline void atom_add_64(__global uint* low, __global uint* high, ulong value) {
     uint low_val = (uint)value;
     uint high_val = (uint)(value >> 32);
@@ -82,15 +83,15 @@ inline void atom_add_64(__global uint* low, __global uint* high, ulong value) {
     // 先更新低32位
     uint old_low = atom_add(low, low_val);
     
-    // 如果低32位溢出，增加高32位
-    // 注意：这里假设 value 不会导致多次溢出（即 value < 2^32）
-    if (old_low > 0xFFFFFFFFU - low_val) {
-        atom_add(high, 1);
-    }
+    // 计算高32位需要增加的值：
+    // 1. value 本身的高32位 (high_val)
+    // 2. 如果低32位溢出，还需要加1
+    uint carry = (old_low > 0xFFFFFFFFU - low_val) ? 1 : 0;
+    uint high_increment = high_val + carry;
     
-    // 添加高32位部分
-    if (high_val > 0) {
-        atom_add(high, high_val);
+    // 更新高32位
+    if (high_increment > 0) {
+        atom_add(high, high_increment);
     }
 }
 
