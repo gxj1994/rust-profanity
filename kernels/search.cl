@@ -39,6 +39,16 @@ typedef struct {
 inline void get_ethereum_private_key_local(const local_mnemonic_t* mnemonic, uchar private_key[32]);
 inline bool increment_entropy(uchar entropy[32], uint step);
 
+// 24 个 11-bit 单词索引的预计算偏移，减少循环内整数运算
+constant uchar WORD_BYTE_IDX[24] = {
+    0, 1, 2, 4, 5, 6, 8, 9, 11, 12, 13, 15,
+    16, 17, 19, 20, 22, 23, 24, 26, 27, 28, 30, 31
+};
+constant uchar WORD_BIT_SHIFT[24] = {
+    0, 3, 6, 1, 4, 7, 2, 5, 0, 3, 6, 1,
+    4, 7, 2, 5, 0, 3, 6, 1, 4, 7, 2, 5
+};
+
 // 从熵生成以太坊地址
 // 流程: 熵 -> 助记词 -> 种子 -> 私钥 -> 公钥 -> Keccak-256 -> 地址
 // 优化: entropy_to_mnemonic 逻辑已内联，减少函数调用开销
@@ -52,10 +62,10 @@ inline void derive_address_from_entropy(const uchar entropy[32], uchar address[2
     
     // 直接写入 local_mnemonic_t，避免 words[24] 临时数组
     local_mnemonic_t mn;
+    #pragma unroll
     for (int i = 0; i < 24; i++) {
-        int bit_offset = i * 11;
-        int byte_idx = bit_offset >> 3;  // / 8
-        int bit_shift = bit_offset & 7;  // % 8
+        uint byte_idx = WORD_BYTE_IDX[i];
+        uint bit_shift = WORD_BIT_SHIFT[i];
         
         // 从 entropy(0..31) + checksum(32) 按需读取 3 字节窗口，避免 all_bits[33] 私有缓冲
         uchar b0 = (byte_idx < 32) ? entropy[byte_idx] : checksum_bits;
