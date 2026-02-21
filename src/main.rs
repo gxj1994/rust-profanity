@@ -197,13 +197,8 @@ fn main() -> anyhow::Result<()> {
         // 检查是否找到（原子读取标志）
         if search_kernel.check_found()? {
             found = true;
-            // 读取结果（非阻塞循环直到成功）
-            loop {
-                match search_kernel.read_result_nonblock() {
-                    Ok(r) => { result = r; break; }
-                    Err(_) => sleep(Duration::from_millis(50)),
-                }
-            }
+            // 读取结果
+            result = search_kernel.read_result()?;
             break;
         }
         
@@ -211,8 +206,8 @@ fn main() -> anyhow::Result<()> {
         poll_count += 1;
         if poll_count % 10 == 0 {
             let elapsed = start_time.elapsed().as_secs_f64();
-            // 使用非阻塞方式读取结果，避免阻塞主线程
-            if let Ok(r) = search_kernel.read_result_nonblock() {
+            // 读取结果统计
+            if let Ok(r) = search_kernel.read_result() {
                 result = r;
                 let checked = result.total_checked();
                 let speed = if elapsed > 0.0 { checked as f64 / elapsed } else { 0.0 };
@@ -220,8 +215,6 @@ fn main() -> anyhow::Result<()> {
                     "搜索中... 已运行 {:.1} 秒 | 已检查 {} 个地址 | 速度 {:.0} 地址/秒",
                     elapsed, checked, speed
                 );
-            } else {
-                info!("搜索中... 已运行 {:.1} 秒 (GPU计算中)", elapsed);
             }
         }
         
@@ -229,13 +222,10 @@ fn main() -> anyhow::Result<()> {
         sleep(Duration::from_millis(args.poll_interval));
     }
     
-    // 如果超时但还未读取到结果，继续尝试读取
+    // 如果超时但还未读取到结果，尝试读取一次
     if !found {
-        loop {
-            match search_kernel.read_result_nonblock() {
-                Ok(r) => { result = r; break; }
-                Err(_) => sleep(Duration::from_millis(50)),
-            }
+        if let Ok(r) = search_kernel.read_result() {
+            result = r;
         }
     }
     

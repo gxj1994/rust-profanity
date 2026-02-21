@@ -119,33 +119,11 @@ impl SearchKernel {
     pub fn check_found(&self) -> anyhow::Result<bool> {
         let mut flag: Vec<i32> = vec![0];
         
-        // 创建事件对象来跟踪读取操作
-        let mut event = Event::empty();
+        // 使用阻塞读取，但设置一个较小的超时
+        // 直接读取，不创建事件，简化逻辑
+        self.flag_buffer.read(&mut flag).enq()?;
         
-        // 创建非阻塞读命令
-        unsafe {
-            self.flag_buffer.read(&mut flag)
-                .block(false)  // 非阻塞模式
-                .enew(&mut event)  // 关联事件（需要可变引用）
-                .enq()?;
-        }
-        
-        // 刷新队列确保命令被提交
-        self.flag_buffer.default_queue().unwrap().flush()?;
-        
-        // 尝试等待事件完成（非阻塞）
-        // ocl::Event::is_complete() 返回 Result<bool, OclCoreError>
-        match event.is_complete() {
-            Ok(true) => Ok(flag[0] != 0),
-            Ok(false) => {
-                // 读取还未完成，返回未找到（下次再检查）
-                Ok(false)
-            }
-            Err(_) => {
-                // 出错时保守返回未找到
-                Ok(false)
-            }
-        }
+        Ok(flag[0] != 0)
     }
     
     /// 读取搜索结果
@@ -158,43 +136,6 @@ impl SearchKernel {
         };
         
         Ok(result)
-    }
-    
-    /// 非阻塞读取搜索结果
-    pub fn read_result_nonblock(&self) -> anyhow::Result<SearchResult> {
-        let mut result_bytes = vec![0u8; std::mem::size_of::<SearchResult>()];
-        
-        // 创建事件对象来跟踪读取操作
-        let mut event = Event::empty();
-        
-        // 创建非阻塞读命令
-        unsafe {
-            self.result_buffer.read(&mut result_bytes)
-                .block(false)  // 非阻塞模式
-                .enew(&mut event)  // 关联事件
-                .enq()?;
-        }
-        
-        // 刷新队列确保命令被提交
-        self.result_buffer.default_queue().unwrap().flush()?;
-        
-        // 检查事件是否完成
-        match event.is_complete() {
-            Ok(true) => {
-                let result = unsafe {
-                    std::ptr::read(result_bytes.as_ptr() as *const SearchResult)
-                };
-                Ok(result)
-            }
-            Ok(false) => {
-                // 读取还未完成，返回错误
-                anyhow::bail!("读取结果未完成")
-            }
-            Err(e) => {
-                // 出错
-                anyhow::bail!("读取结果失败: {}", e)
-            }
-        }
     }
     
     /// 等待内核完成
