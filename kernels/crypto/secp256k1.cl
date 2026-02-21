@@ -615,6 +615,96 @@ void jacobian_add_affine_c(jacobian_point* r, const jacobian_point* p, const __c
     mp_mod_sub(&r->Z, &t1, &HH);
 }
 
+// Jacobian 点加法: R = P + Q (Q 是仿射坐标点，Z=1) - 支持 __local 地址空间
+// 这个版本直接使用 __local 内存中的预计算表，无需复制
+void jacobian_add_affine_local(jacobian_point* r, const jacobian_point* p, const __local point* q) {
+    if (jacobian_is_infinity(p)) {
+        // 从 __local 复制到私有内存再转换
+        point q_private;
+        q_private.x = q->x;
+        q_private.y = q->y;
+        affine_to_jacobian(r, &q_private);
+        return;
+    }
+    
+    // 从 __local 复制到私有内存
+    point q_private;
+    q_private.x = q->x;
+    q_private.y = q->y;
+    
+    // 检查 Q 是否为无穷远点
+    mp_number zero = {{0,0,0,0,0,0,0,0}};
+    if (mp_cmp(&q_private.x, &zero) == 0 && mp_cmp(&q_private.y, &zero) == 0) {
+        *r = *p;
+        return;
+    }
+    
+    mp_number Z1Z1, Z1Z1Z1, U2, S2, H, HH, I, J, V;
+    mp_number t1, t2;
+    
+    // Z1Z1 = Z1^2
+    mp_mod_mul(&Z1Z1, &p->Z, &p->Z);
+    // Z1Z1Z1 = Z1*Z1Z1
+    mp_mod_mul(&Z1Z1Z1, &p->Z, &Z1Z1);
+    // U2 = X2*Z1Z1
+    mp_mod_mul(&U2, &q_private.x, &Z1Z1);
+    // S2 = Y2*Z1Z1Z1
+    mp_mod_mul(&S2, &q_private.y, &Z1Z1Z1);
+    // H = U2-X1
+    mp_mod_sub(&H, &U2, &p->X);
+    
+    // 检查 H 是否为 0（即 P 和 Q 有相同的 X 坐标）
+    if (mp_cmp(&H, &zero) == 0) {
+        // 需要判断 Y 的关系
+        mp_number sumY;
+        mp_mod_add(&sumY, &S2, &p->Y);  // sumY = S2 + Y1
+        if (mp_cmp(&S2, &p->Y) == 0) {
+            // S2 == Y1，则 Q = P，执行点加倍
+            jacobian_double(r, p);
+        } else if (mp_is_zero(&sumY)) {
+            // S2 == -Y1，则 Q = -P，结果为无穷远点
+            jacobian_set_infinity(r);
+        } else {
+            // 理论上不会发生，置为无穷远点
+            jacobian_set_infinity(r);
+        }
+        return;
+    }
+    
+    // HH = H^2
+    mp_mod_mul(&HH, &H, &H);
+    // I = 4*HH
+    mp_mod_add(&t1, &HH, &HH);
+    mp_mod_add(&I, &t1, &t1);
+    // J = H*I
+    mp_mod_mul(&J, &H, &I);
+    // V = X1*I
+    mp_mod_mul(&V, &p->X, &I);
+    
+    // t1 = 2*(S2-Y1)
+    mp_mod_sub(&t1, &S2, &p->Y);
+    mp_mod_add(&t2, &t1, &t1);
+    
+    // X3 = t2^2 - J - 2*V
+    mp_mod_mul(&t1, &t2, &t2);
+    mp_mod_sub(&t1, &t1, &J);
+    mp_mod_sub(&t1, &t1, &V);
+    mp_mod_sub(&r->X, &t1, &V);
+    
+    // Y3 = t2*(V-X3) - 2*Y1*J
+    mp_mod_sub(&t1, &V, &r->X);
+    mp_mod_mul(&V, &t2, &t1);
+    mp_mod_mul(&t1, &p->Y, &J);
+    mp_mod_add(&t2, &t1, &t1);
+    mp_mod_sub(&r->Y, &V, &t2);
+    
+    // Z3 = (Z1+H)^2 - Z1Z1 - HH
+    mp_mod_add(&t1, &p->Z, &H);
+    mp_mod_mul(&t2, &t1, &t1);
+    mp_mod_sub(&t1, &t2, &Z1Z1);
+    mp_mod_sub(&r->Z, &t1, &HH);
+}
+
 // Jacobian 点加法: R = P + Q (Q 是仿射坐标点，Z=1) - 标准版本
 void jacobian_add_affine(jacobian_point* r, const jacobian_point* p, const point* q) {
     if (jacobian_is_infinity(p)) {

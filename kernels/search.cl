@@ -135,10 +135,24 @@ inline void atom_add_64(__global uint* low, __global uint* high, ulong value) {
 __kernel void search_kernel(
     __constant search_config_t* config,
     __global search_result_t* result,
-    __global int* g_found_flag
+    __global int* g_found_flag,
+    __local point* shared_precomputed  // 共享预计算表，大小为 16
 ) {
     uint tid = get_global_id(0);
+    uint lid = get_local_id(0);
+    uint local_size = get_local_size(0);
+    
     if (tid >= config->num_threads) return;
+    
+    // 第一个 work-item 将预计算表从 __constant 复制到 __local
+    if (lid == 0) {
+        for (int i = 0; i < 16; i++) {
+            shared_precomputed[i] = PRECOMPUTED_G[i];
+        }
+    }
+    
+    // 等待所有 work-item 同步，确保复制完成
+    barrier(CLK_LOCAL_MEM_FENCE);
     
     // 复制基础熵到本地内存 (使用 uchar16 向量类型优化)
     uchar local_entropy[32];
