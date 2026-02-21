@@ -17,6 +17,73 @@ pub struct OpenCLContext {
 }
 
 impl OpenCLContext {
+    fn build_context(platform: Platform, device: Device) -> anyhow::Result<Self> {
+        let context = Context::builder()
+            .platform(platform)
+            .devices(device)
+            .build()?;
+        let queue = Queue::new(&context, device, None)?;
+
+        Ok(Self {
+            platform,
+            device,
+            context,
+            queue,
+        })
+    }
+
+    fn device_kind(device: &Device) -> String {
+        device.info(DeviceInfo::Type).ok()
+            .and_then(|t| t.to_string().parse::<u64>().ok())
+            .map(|t| match t {
+                4 => "GPU",
+                2 => "CPU",
+                8 => "ACCELERATOR",
+                _ => "OTHER",
+            })
+            .unwrap_or("UNKNOWN")
+            .to_string()
+    }
+
+    fn is_gpu_device(device: &Device) -> bool {
+        let device_name = device.name().unwrap_or_default();
+        let device_type = Self::device_kind(device);
+        device_type == "GPU" || {
+            let name_lower = device_name.to_lowercase();
+            name_lower.contains("gpu")
+                || name_lower.contains("graphics")
+                || name_lower.contains("nvidia")
+                || name_lower.contains("amd")
+                || name_lower.contains("radeon")
+        }
+    }
+
+    /// 枚举所有 GPU 设备（跨平台）
+    pub fn all_gpu_contexts() -> anyhow::Result<Vec<Self>> {
+        let platforms = Platform::list();
+        if platforms.is_empty() {
+            anyhow::bail!("No OpenCL platforms found");
+        }
+
+        let mut contexts = Vec::new();
+        for platform in &platforms {
+            let devices = Device::list_all(platform)?;
+            info!("Platform: {:?}, Devices: {}", platform.name(), devices.len());
+
+            for device in devices {
+                let device_name = device.name()?;
+                let device_type = Self::device_kind(&device);
+                info!("  Device: {} (Type: {})", device_name, device_type);
+
+                if Self::is_gpu_device(&device) {
+                    contexts.push(Self::build_context(*platform, device)?);
+                }
+            }
+        }
+
+        Ok(contexts)
+    }
+
     /// 创建新的 OpenCL 上下文
     /// 
     /// 自动选择最佳的 GPU 设备
@@ -29,48 +96,22 @@ impl OpenCLContext {
         
         info!("Found {} OpenCL platform(s)", platforms.len());
         
-        // 选择第一个有 GPU 设备的平台
+        // 选择第一个有 GPU 的设备（保持旧行为）
         let mut selected_platform = None;
         let mut selected_device = None;
-        
         for platform in &platforms {
             let devices = Device::list_all(platform)?;
             info!("Platform: {:?}, Devices: {}", platform.name(), devices.len());
-            
-            // 优先选择 GPU 设备
             for device in devices {
                 let device_name = device.name()?;
-                
-                // 使用 OpenCL API 查询设备类型
-                let device_type = device.info(DeviceInfo::Type).ok()
-                    .and_then(|t| t.to_string().parse::<u64>().ok())
-                    .map(|t| match t {
-                        4 => "GPU",
-                        2 => "CPU",
-                        8 => "ACCELERATOR",
-                        _ => "OTHER",
-                    })
-                    .unwrap_or("UNKNOWN");
-                
+                let device_type = Self::device_kind(&device);
                 info!("  Device: {} (Type: {})", device_name, device_type);
-                
-                // 检测是否为 GPU (优先使用 API 查询，回退到名称判断)
-                let is_gpu = device_type == "GPU" || {
-                    let name_lower = device_name.to_lowercase();
-                    name_lower.contains("gpu")
-                        || name_lower.contains("graphics")
-                        || name_lower.contains("nvidia")
-                        || name_lower.contains("amd")
-                        || name_lower.contains("radeon")
-                };
-                
-                if is_gpu {
+                if Self::is_gpu_device(&device) {
                     selected_platform = Some(*platform);
                     selected_device = Some(device);
                     break;
                 }
             }
-            
             if selected_device.is_some() {
                 break;
             }
@@ -93,21 +134,7 @@ impl OpenCLContext {
         let device_name = device.name()?;
         info!("Using device: {}", device_name);
         
-        // 创建上下文
-        let context = Context::builder()
-            .platform(platform)
-            .devices(device)
-            .build()?;
-        
-        // 创建命令队列
-        let queue = Queue::new(&context, device, None)?;
-        
-        Ok(Self {
-            platform,
-            device,
-            context,
-            queue,
-        })
+        Self::build_context(platform, device)
     }
     
     /// 获取设备信息

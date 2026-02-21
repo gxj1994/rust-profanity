@@ -10,8 +10,8 @@ use log::info;
 use rand::rngs::OsRng;
 use rand::RngCore;
 use std::io::{self, Write};
-use std::time::{Duration, Instant};
 use std::thread::sleep;
+use std::time::{Duration, Instant};
 
 use rust_profanity::{
     config::{*, PatternConfig},
@@ -77,6 +77,10 @@ struct Args {
     /// 地址搜索来源模式: mnemonic(助记词) / private-key(直接私钥)
     #[arg(long, value_enum, default_value = "mnemonic")]
     source_mode: SourceModeArg,
+
+    /// 启用多 GPU 并行 (自动使用全部可用 GPU)
+    #[arg(long, default_value_t = false)]
+    multi_gpu: bool,
 }
 
 /// 解析搜索条件
@@ -122,6 +126,37 @@ fn random_nonzero_seed() -> [u8; 32] {
     seed
 }
 
+fn seed_with_offset(base_seed: [u8; 32], offset: u64) -> [u8; 32] {
+    let mut out = base_seed;
+    let mut carry = offset;
+    for b in out.iter_mut().rev() {
+        let sum = (*b as u64) + (carry & 0xFF);
+        *b = (sum & 0xFF) as u8;
+        carry = (carry >> 8) + (sum >> 8);
+        if carry == 0 {
+            break;
+        }
+    }
+    out
+}
+
+fn split_threads(total_threads: usize, workers: usize) -> Vec<usize> {
+    if workers == 0 {
+        return Vec::new();
+    }
+    let base = total_threads / workers;
+    let remainder = total_threads % workers;
+    (0..workers)
+        .map(|i| base + usize::from(i < remainder))
+        .collect()
+}
+
+struct SearchWorker {
+    ctx: OpenCLContext,
+    kernel: SearchKernel,
+    threads: usize,
+}
+
 /// 主函数
 fn main() -> anyhow::Result<()> {
     // 初始化日志
@@ -154,34 +189,63 @@ fn main() -> anyhow::Result<()> {
     
     // 3. 初始化 OpenCL
     info!("初始化 OpenCL...");
-    let ctx = OpenCLContext::new()?;
-    ctx.print_device_info()?;
-    
+    let contexts = if args.multi_gpu {
+        let gpu_contexts = OpenCLContext::all_gpu_contexts()?;
+        if gpu_contexts.is_empty() {
+            info!("未检测到多个 GPU，回退到默认设备");
+            vec![OpenCLContext::new()?]
+        } else {
+            gpu_contexts
+        }
+    } else {
+        vec![OpenCLContext::new()?]
+    };
+    for ctx in &contexts {
+        ctx.print_device_info()?;
+    }
+
+    let thread_plan = split_threads(args.threads as usize, contexts.len());
+
     // 4. 加载并编译内核
     info!("加载 OpenCL 内核...");
     // 使用完整版内核 (包含完整加密实现)
     let kernel_source = load_kernel_source()?;
-    let mut search_kernel = SearchKernel::new(&ctx, &kernel_source, args.threads as usize)?;
-    
-    // 5. 准备配置数据
-    // 根据是否有模式匹配创建配置
-    let config = if let Some(pattern) = pattern_config {
-        SearchConfig::new_with_pattern(base_seed, args.threads, condition, pattern)
-    } else {
-        SearchConfig::new(base_seed, args.threads, condition)
+    let mut workers = Vec::new();
+    for (idx, (ctx, threads)) in contexts.into_iter().zip(thread_plan.into_iter()).enumerate() {
+        if threads == 0 {
+            let device_name = ctx.device.name().unwrap_or_else(|_| String::from("<unknown>"));
+            info!("跳过设备 #{idx} ({device_name})，分配线程为 0");
+            continue;
+        }
+
+        let device_name = ctx.device.name().unwrap_or_else(|_| String::from("<unknown>"));
+        let kernel = SearchKernel::new(&ctx, &kernel_source, threads)?;
+        let worker_seed = seed_with_offset(base_seed, idx as u64 + 1);
+        let config = if let Some(pattern) = pattern_config {
+            SearchConfig::new_with_pattern(worker_seed, threads as u32, condition, pattern)
+        } else {
+            SearchConfig::new(worker_seed, threads as u32, condition)
+        }
+        .with_source_mode(source_mode)
+        .with_target_chain(TargetChain::Ethereum);
+        kernel.set_config(&config)?;
+        info!("设备 #{idx}: {device_name}，分配线程: {threads}");
+        workers.push(SearchWorker { ctx, kernel, threads });
     }
-    .with_source_mode(source_mode)
-    .with_target_chain(TargetChain::Ethereum);
-    search_kernel.set_config(&config)?;
-    
+    if workers.is_empty() {
+        anyhow::bail!("可用设备的线程分配结果为空，请提高 --threads 或关闭 --multi-gpu");
+    }
+
     // 6. 启动内核
-    info!("启动搜索内核，使用 {} 个线程...", args.threads);
+    info!("启动搜索内核，设备数: {}，总线程数: {}", workers.len(), args.threads);
     let start_time = Instant::now();
-    search_kernel.launch(args.threads as usize, Some(args.work_group_size))?;
+    for worker in &workers {
+        worker.kernel.launch(worker.threads, Some(args.work_group_size))?;
+    }
     
     // 7. 轮询等待结果并读取
     info!("开始轮询等待结果...");
-    let mut found = false;
+    let mut found = None;
     let mut progress_printed = false;
     let timeout_enabled = args.timeout > 0;
     let timeout_secs = args.timeout;
@@ -198,13 +262,17 @@ fn main() -> anyhow::Result<()> {
         }
         
         // 检查是否找到（原子读取标志）
-        if let Some(is_found) = search_kernel.poll_found()? {
-            if is_found {
-                found = true;
-                // 读取结果
-                result = search_kernel.read_result()?;
-                break;
+        for (idx, worker) in workers.iter_mut().enumerate() {
+            if let Some(is_found) = worker.kernel.poll_found()? {
+                if is_found {
+                    found = Some(idx);
+                    result = worker.kernel.read_result()?;
+                    break;
+                }
             }
+        }
+        if found.is_some() {
+            break;
         }
         
         // 显示进度（仅运行时间）
@@ -221,9 +289,15 @@ fn main() -> anyhow::Result<()> {
     }
 
     // 如果超时但还未读取到结果，尝试读取一次
-    if !found {
-        if let Ok(r) = search_kernel.read_result() {
-            result = r;
+    if found.is_none() {
+        for (idx, worker) in workers.iter().enumerate() {
+            if let Ok(r) = worker.kernel.read_result() {
+                if r.found != 0 {
+                    found = Some(idx);
+                    result = r;
+                    break;
+                }
+            }
         }
     }
     
@@ -234,16 +308,22 @@ fn main() -> anyhow::Result<()> {
     println!();
     println!("========================================");
 
-    let total_checked = search_kernel
-        .read_total_checked(args.threads as usize)
-        .unwrap_or_else(|_| result.total_checked());
+    let total_checked: u64 = workers
+        .iter()
+        .map(|w| w.kernel.read_total_checked(w.threads).unwrap_or(0))
+        .sum();
+    let total_checked = if total_checked > 0 {
+        total_checked
+    } else {
+        result.total_checked()
+    };
     let speed = if elapsed.as_secs_f64() > 0.0 {
         total_checked as f64 / elapsed.as_secs_f64()
     } else {
         0.0
     };
     
-    if found && result.found != 0 {
+    if found.is_some() && result.found != 0 {
         println!("✓ 找到符合条件的地址!");
         println!("========================================");
         println!("以太坊地址: 0x{}", hex::encode(result.eth_address));
@@ -261,7 +341,15 @@ fn main() -> anyhow::Result<()> {
         }
 
         println!("找到线程: {}", result.found_by_thread);
-    } else if !found && is_timeout {
+        if let Some(worker_idx) = found {
+            let device_name = workers[worker_idx]
+                .ctx
+                .device
+                .name()
+                .unwrap_or_else(|_| String::from("<unknown>"));
+            println!("找到设备: #{} {}", worker_idx, device_name);
+        }
+    } else if found.is_none() && is_timeout {
         println!("✗ 搜索超时 ({} 秒) - 强制终止", timeout_secs);
     } else {
         println!("✗ 未找到符合条件的地址");
@@ -274,7 +362,7 @@ fn main() -> anyhow::Result<()> {
     // 10. 等待内核完成（确保 GPU 资源正确释放）
     // 如果已经找到结果，内核会在检测到全局标志后自动退出
     // 添加超时避免无限等待
-    if found {
+    if found.is_some() {
         info!("已找到结果，等待 GPU 内核清理（最多5秒）...");
         // 给内核一些时间来检测全局标志并退出
         sleep(Duration::from_millis(500));
@@ -282,7 +370,9 @@ fn main() -> anyhow::Result<()> {
         // 注意：在 macOS 上，强制终止内核可能导致问题，所以这里只是短暂等待
     } else {
         info!("等待 GPU 内核完成...");
-        let _ = search_kernel.wait();
+        for worker in &workers {
+            let _ = worker.kernel.wait();
+        }
     }
     
     Ok(())
@@ -319,6 +409,7 @@ mod tests {
             poll_interval: 100,
             timeout: 0,
             source_mode: SourceModeArg::Mnemonic,
+            multi_gpu: false,
         };
         
         let (condition, _) = parse_condition(&args).unwrap();
@@ -338,6 +429,7 @@ mod tests {
             poll_interval: 250,
             timeout: 0,
             source_mode: SourceModeArg::Mnemonic,
+            multi_gpu: false,
         };
         
         let result = parse_condition(&args);

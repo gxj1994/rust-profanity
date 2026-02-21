@@ -7,6 +7,7 @@ GPU 以太坊靓号地址搜索系统 - Rust + OpenCL 实现
 ## 功能特性
 
 - **GPU 加速**: 使用 OpenCL 在 GPU 上并行搜索以太坊靓号地址
+- **多 GPU 并行**: 可选使用全部可用 GPU 并发搜索
 - **多条件支持**: 支持前缀匹配、后缀匹配、前导零匹配
 - **BIP39/BIP32**: 完整的助记词和密钥派生支持
 - **跨平台**: 支持 macOS、Linux、Windows (需 OpenCL 运行时)
@@ -101,6 +102,14 @@ cargo test
 ./target/release/rust-profanity --pattern 0x0XXX1XXXX2XXXXXXXXXXXXXXXXXXXXXXXXXXXX1X --threads 4096 --timeout 300
 ```
 
+### 多 GPU 并行
+
+自动使用全部可用 GPU，并将 `--threads` 总线程数按设备均分：
+
+```bash
+./target/release/rust-profanity --prefix 00 --threads 4096 --multi-gpu --timeout 60
+```
+
 ### 参数说明
 
 | 参数 | 说明 | 默认值 |
@@ -110,6 +119,7 @@ cargo test
 | `--leading-zeros` | 前导零个数 | - |
 | `--pattern` | 完整地址模式匹配 (X/*/? 为通配符) | - |
 | `--threads` | GPU 线程数 | 1024 |
+| `--multi-gpu` | 启用多 GPU 并行（自动使用全部 GPU） | false |
 | `--timeout` | 搜索超时时间 (秒) | 60 |
 | `--work-group-size` | OpenCL 工作组大小 | 128 |
 | `--source-mode` | 搜索来源模式: `mnemonic` / `private-key` | `mnemonic` |
