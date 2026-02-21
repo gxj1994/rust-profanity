@@ -176,12 +176,13 @@ fn main() -> anyhow::Result<()> {
     let start_time = Instant::now();
     search_kernel.launch(args.threads as usize, Some(args.work_group_size))?;
     
-    // 7. 轮询等待结果
+    // 7. 轮询等待结果并读取
     info!("开始轮询等待结果...");
     let mut found = false;
     let mut poll_count = 0;
     let timeout_enabled = args.timeout > 0;
     let timeout_secs = args.timeout;
+    let mut result = SearchResult::default();
     
     loop {
         let elapsed_secs = start_time.elapsed().as_secs();
@@ -193,9 +194,16 @@ fn main() -> anyhow::Result<()> {
             break;
         }
         
-        // 检查是否找到
+        // 检查是否找到（原子读取标志）
         if search_kernel.check_found()? {
             found = true;
+            // 读取结果（非阻塞循环直到成功）
+            loop {
+                match search_kernel.read_result_nonblock() {
+                    Ok(r) => { result = r; break; }
+                    Err(_) => sleep(Duration::from_millis(50)),
+                }
+            }
             break;
         }
         
@@ -204,9 +212,9 @@ fn main() -> anyhow::Result<()> {
         if poll_count % 10 == 0 {
             let elapsed = start_time.elapsed().as_secs_f64();
             // 使用非阻塞方式读取结果，避免阻塞主线程
-            let result = search_kernel.read_result_nonblock().ok();
-            if let Some(r) = result {
-                let checked = r.total_checked();
+            if let Ok(r) = search_kernel.read_result_nonblock() {
+                result = r;
+                let checked = result.total_checked();
                 let speed = if elapsed > 0.0 { checked as f64 / elapsed } else { 0.0 };
                 info!(
                     "搜索中... 已运行 {:.1} 秒 | 已检查 {} 个地址 | 速度 {:.0} 地址/秒",
@@ -221,18 +229,16 @@ fn main() -> anyhow::Result<()> {
         sleep(Duration::from_millis(args.poll_interval));
     }
     
-    // 8. 读取结果
-    // 注意：始终使用非阻塞方式，避免内核仍在运行时阻塞主线程
-    let result = loop {
-        match search_kernel.read_result_nonblock() {
-            Ok(r) => break r,
-            Err(_) => {
-                // 读取未完成，等待一段时间后重试
-                sleep(Duration::from_millis(100));
-                continue;
+    // 如果超时但还未读取到结果，继续尝试读取
+    if !found {
+        loop {
+            match search_kernel.read_result_nonblock() {
+                Ok(r) => { result = r; break; }
+                Err(_) => sleep(Duration::from_millis(50)),
             }
         }
-    };
+    }
+    
     let elapsed = start_time.elapsed();
     let is_timeout = timeout_enabled && elapsed.as_secs() >= timeout_secs;
     

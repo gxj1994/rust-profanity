@@ -73,14 +73,22 @@ inline int atomic_load_flag(__global int* flag) {
 }
 
 // 辅助函数：原子累加 64 位计数器 (拆分为两个 32 位)
+// 注意：此函数使用原子操作分别更新低32位和高32位
+// 由于是两个独立的原子操作，计数可能不是完全精确的，但对于统计目的是足够的
 inline void atom_add_64(__global uint* low, __global uint* high, ulong value) {
-    uint old_low = atom_add(low, (uint)value);
-    // 检查是否溢出
-    if (old_low > (old_low + (uint)value)) {
+    uint low_val = (uint)value;
+    uint high_val = (uint)(value >> 32);
+    
+    // 先更新低32位
+    uint old_low = atom_add(low, low_val);
+    
+    // 如果低32位溢出，增加高32位
+    // 注意：这里假设 value 不会导致多次溢出（即 value < 2^32）
+    if (old_low > 0xFFFFFFFFU - low_val) {
         atom_add(high, 1);
     }
-    // 处理高32位
-    uint high_val = (uint)(value >> 32);
+    
+    // 添加高32位部分
     if (high_val > 0) {
         atom_add(high, high_val);
     }
