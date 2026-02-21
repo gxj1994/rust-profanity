@@ -72,16 +72,14 @@ void keccak_f1600(ulong st[25]) {
     }
 }
 
-// 字节序转换辅助函数 - 8字节小端序加载
-ulong load_u64_le(const uchar* p) {
-    return ((ulong)p[0]) | ((ulong)p[1] << 8) | ((ulong)p[2] << 16) | ((ulong)p[3] << 24) |
-           ((ulong)p[4] << 32) | ((ulong)p[5] << 40) | ((ulong)p[6] << 48) | ((ulong)p[7] << 56);
+// 字节序转换辅助函数 - 8字节小端序加载 (使用 vload8 优化)
+inline ulong load_u64_le(const uchar* p) {
+    return vload8(0, p).s0;
 }
 
-// 字节序转换辅助函数 - 8字节小端序存储
-void store_u64_le(uchar* p, ulong v) {
-    p[0] = (uchar)v; p[1] = (uchar)(v >> 8); p[2] = (uchar)(v >> 16); p[3] = (uchar)(v >> 24);
-    p[4] = (uchar)(v >> 32); p[5] = (uchar)(v >> 40); p[6] = (uchar)(v >> 48); p[7] = (uchar)(v >> 56);
+// 字节序转换辅助函数 - 8字节小端序存储 (使用 vstore8 优化)
+inline void store_u64_le(uchar* p, ulong v) {
+    vstore8((ulong8)(v), 0, p);
 }
 
 // Keccak-256 哈希函数

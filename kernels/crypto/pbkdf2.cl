@@ -31,20 +31,24 @@ void pbkdf2_hmac_sha512_block(
     uchar u[64];
     hmac_sha512(password, password_len, salt_block, salt_len + 4, u);
     
-    // T = U_1 (直接复制到 output)
-    for (uint i = 0; i < 64; i++) {
-        output[i] = u[i];
-    }
+    // T = U_1 (使用 uchar16 向量类型批量复制 64 字节)
+    uchar16* out16 = (uchar16*)output;
+    uchar16* u16 = (uchar16*)u;
+    out16[0] = u16[0];
+    out16[1] = u16[1];
+    out16[2] = u16[2];
+    out16[3] = u16[3];
     
     // U_2 到 U_iterations
     for (uint iter = 1; iter < iterations; iter++) {
         // 直接使用 u 作为输入和输出，避免 prev_u 拷贝
         hmac_sha512(password, password_len, u, 64, u);
         
-        // T ^= U_i
-        for (uint i = 0; i < 64; i++) {
-            output[i] ^= u[i];
-        }
+        // T ^= U_i (使用 uchar16 向量类型批量异或)
+        out16[0] ^= u16[0];
+        out16[1] ^= u16[1];
+        out16[2] ^= u16[2];
+        out16[3] ^= u16[3];
     }
 }
 

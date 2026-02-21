@@ -34,23 +34,19 @@ __constant const mp_number Gy = {
 // 计算乘法的高 32 位（使用内置函数）
 // OpenCL 内置 mul_hi 函数可用
 
-// 从字节数组加载 mp_number (大端序)
+// 从字节数组加载 mp_number (大端序) - 使用 vload4 优化
 void mp_from_bytes(const uchar bytes[32], mp_number* result) {
     for (int i = 0; i < 8; i++) {
-        result->d[7 - i] = ((uint)bytes[i * 4] << 24) |
-                          ((uint)bytes[i * 4 + 1] << 16) |
-                          ((uint)bytes[i * 4 + 2] << 8) |
-                          ((uint)bytes[i * 4 + 3]);
+        // vload4 加载小端序数据，需要交换字节序
+        result->d[7 - i] = as_uint(rotate(vload4(i, bytes).s3210, (uint4)0));
     }
 }
 
-// 将 mp_number 保存到字节数组 (大端序)
+// 将 mp_number 保存到字节数组 (大端序) - 使用 vstore4 优化
 void mp_to_bytes(const mp_number* a, uchar bytes[32]) {
     for (int i = 0; i < 8; i++) {
-        bytes[i * 4] = (uchar)(a->d[7 - i] >> 24);
-        bytes[i * 4 + 1] = (uchar)(a->d[7 - i] >> 16);
-        bytes[i * 4 + 2] = (uchar)(a->d[7 - i] >> 8);
-        bytes[i * 4 + 3] = (uchar)(a->d[7 - i]);
+        uint4 val = (uint4)(rotate(a->d[7 - i], (uint)0));
+        vstore4(as_uchar4(rotate(val, (uint4)0)).s3210, i, bytes);
     }
 }
 

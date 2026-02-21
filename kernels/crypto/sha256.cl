@@ -70,12 +70,10 @@ void sha256_compress(uint state[8], const uchar block[64]) {
     uint a, b, c, d, e, f, g, h;
     uint T1, T2;
     
-    // 准备消息调度
+    // 准备消息调度 - 使用 vload4 优化大端序加载
+    // 注意: vload4 按小端序解释数据，需要字节交换
     for (uint i = 0; i < 16; i++) {
-        W[i] = ((uint)block[i * 4] << 24) |
-               ((uint)block[i * 4 + 1] << 16) |
-               ((uint)block[i * 4 + 2] << 8) |
-               ((uint)block[i * 4 + 3]);
+        W[i] = as_uint(rotate(vload4(i, block).s3210, (uint4)0));
     }
     
     for (uint i = 16; i < 64; i++) {
@@ -183,12 +181,10 @@ void sha256(const uchar* data, uint len, uchar hash[32]) {
         sha256_compress(state, block);
     }
     
-    // 输出哈希
+    // 输出哈希 - 使用 vstore4 优化大端序存储
     for (uint i = 0; i < 8; i++) {
-        hash[i * 4] = (uchar)(state[i] >> 24);
-        hash[i * 4 + 1] = (uchar)(state[i] >> 16);
-        hash[i * 4 + 2] = (uchar)(state[i] >> 8);
-        hash[i * 4 + 3] = (uchar)state[i];
+        uint4 val = (uint4)(rotate(state[i], (uint)0));
+        vstore4(as_uchar4(rotate(val, (uint4)0)).s3210, i, hash);
     }
 }
 
