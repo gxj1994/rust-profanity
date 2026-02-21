@@ -12,8 +12,7 @@ pub mod opencl;
 pub use api::{SearchCondition, SearchRequest, SearchResponse, search};
 pub use config::{
     ConditionType, PatternConfig, SearchConfig, SearchResult, SourceMode, TargetChain,
-    parse_leading_zeros_condition, parse_pattern_condition, parse_prefix_condition,
-    parse_suffix_condition,
+    parse_pattern_condition,
 };
 pub use kernel_loader::load_kernel_source;
 pub use mnemonic::Mnemonic;

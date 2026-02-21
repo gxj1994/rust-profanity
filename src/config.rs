@@ -192,93 +192,6 @@ impl ConditionType {
     pub fn encode(self, param: u64) -> u64 {
         ((self as u64) << 48) | (param & 0xFFFFFFFFFFFF)
     }
-
-    /// 编码前缀/后缀条件，将字节数打包进 condition
-    /// 格式: [类型:16位][字节数:8位][参数:40位]
-    /// 参数最多40位(5字节)，足够存储6字节的前缀/后缀(因为十六进制字符串最多12字符=6字节)
-    /// 但实际上我们存储的是大端序的数值，所以6字节需要48位，这里调整为：
-    /// 格式: [类型:16位][字节数:4位][保留:4位][参数:40位]
-    /// 对于需要6字节的情况，我们特殊处理：字节数=0表示6字节
-    pub fn encode_with_bytes(self, param: u64, bytes: u8) -> u64 {
-        let bytes_field = if bytes >= 6 { 0 } else { bytes };
-        ((self as u64) << 48) | ((bytes_field as u64) << 44) | (param & 0xFFFFFFFFFF)
-    }
-}
-
-/// 解析十六进制字符串为字节，并编码为条件参数
-///
-/// 公共辅助函数，用于前缀和后缀条件的解析
-fn parse_hex_to_condition(
-    input: &str,
-    condition_type: ConditionType,
-    max_bytes: usize,
-    allow_odd_length: bool,
-) -> anyhow::Result<u64> {
-    let hex_str = input.trim_start_matches("0x");
-
-    // 验证所有字符都是有效的十六进制字符
-    if !hex_str.chars().all(|c| c.is_ascii_hexdigit()) {
-        anyhow::bail!("Input must contain only hexadecimal characters (0-9, a-f, A-F)");
-    }
-
-    // 处理奇数长度
-    let hex_str = if hex_str.len() % 2 == 1 {
-        if !allow_odd_length {
-            anyhow::bail!("Input must have even number of hex characters");
-        }
-        // 在前面补0
-        format!("0{}", hex_str)
-    } else {
-        hex_str.to_string()
-    };
-
-    let bytes = hex::decode(&hex_str)?;
-
-    if bytes.len() > max_bytes {
-        anyhow::bail!(
-            "Input too long, max {} hex characters ({} bytes)",
-            max_bytes * 2,
-            max_bytes
-        );
-    }
-
-    // 将字节编码为 u64 参数 (大端序)
-    let param: u64 = bytes.iter().fold(0u64, |acc, &b| (acc << 8) | (b as u64));
-
-    // 将字节数打包进 condition
-    let bytes_len = bytes.len() as u8;
-    Ok(condition_type.encode_with_bytes(param, bytes_len))
-}
-
-/// 解析前缀条件
-///
-/// 将十六进制字符串解析为字节序列。
-/// 输入应为十六进制字符（0-9, a-f, A-F），长度必须为偶数。
-///
-/// # Example
-/// ```
-/// use rust_profanity::parse_prefix_condition;
-/// let condition = parse_prefix_condition("8888").unwrap();   // [0x88, 0x88]
-/// ```
-pub fn parse_prefix_condition(prefix: &str) -> anyhow::Result<u64> {
-    parse_hex_to_condition(prefix, ConditionType::Prefix, 6, false)
-}
-
-/// 解析后缀条件
-///
-/// 将十六进制字符串解析为字节序列。
-/// 输入应为十六进制字符（0-9, a-f, A-F）。
-/// 如果长度为奇数，在前面补0。
-pub fn parse_suffix_condition(suffix: &str) -> anyhow::Result<u64> {
-    parse_hex_to_condition(suffix, ConditionType::Suffix, 6, true)
-}
-
-/// 解析前导零条件 (至少)
-pub fn parse_leading_zeros_condition(zeros: u32) -> anyhow::Result<u64> {
-    if zeros > 20 {
-        anyhow::bail!("Leading zeros cannot exceed 20");
-    }
-    Ok(ConditionType::Leading.encode(zeros as u64))
 }
 
 /// 解析模式匹配条件
@@ -365,8 +278,9 @@ mod tests {
 
     #[test]
     fn test_parse_prefix() {
-        let condition = parse_prefix_condition("8888").unwrap();
-        assert_eq!(condition >> 48, 0x01);
+        let (condition, _pattern) =
+            parse_pattern_condition("0x8888XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX").unwrap();
+        assert_eq!(condition >> 48, 0x03);
     }
 
     #[test]

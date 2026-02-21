@@ -179,31 +179,7 @@ fn main() -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rust_profanity::config::ConditionType;
-    use rust_profanity::{
-        parse_leading_zeros_condition, parse_pattern_condition, parse_prefix_condition,
-        parse_suffix_condition,
-    };
-
-    /// 模拟 OpenCL 端的 compare_prefix 逻辑
-    fn compare_prefix(address: &[u8; 20], param_bytes: usize, param: u64) -> bool {
-        if param_bytes >= 2 {
-            if address[1] != (param & 0xFF) as u8 {
-                return false;
-            }
-        }
-        if param_bytes >= 1 {
-            let shift = if param_bytes > 1 {
-                8 * (param_bytes - 1)
-            } else {
-                0
-            };
-            if address[0] != ((param >> shift) & 0xFF) as u8 {
-                return false;
-            }
-        }
-        true
-    }
+    use rust_profanity::parse_pattern_condition;
 
     #[test]
     fn test_parse_args() {
@@ -246,68 +222,10 @@ mod tests {
         assert!(err_msg.contains("请指定搜索条件"));
     }
 
-    /// 测试: 验证偶数长度前缀"8888"的编码
+    /// 测试: 验证前缀可转为 pattern 语义
     #[test]
-    fn test_even_length_prefix_8888() {
-        let condition = parse_prefix_condition("8888").unwrap();
-
-        let cond_type = (condition >> 48) & 0xFFFF;
-        assert_eq!(cond_type, ConditionType::Prefix as u64);
-
-        let bytes_field = (condition >> 44) & 0x0F;
-        assert_eq!(bytes_field, 2);
-
-        let param = condition & 0xFFFFFFFFFF;
-        assert_eq!(param, 0x8888);
-    }
-
-    /// 测试: 验证前缀匹配逻辑 (1234)
-    #[test]
-    fn test_compare_prefix_1234() {
-        let condition = parse_prefix_condition("1234").unwrap();
-        let param_bytes = ((condition >> 44) & 0x0F) as usize;
-        let param = condition & 0xFFFFFFFFFF;
-
-        // bytes=[0x12, 0x34] -> param = 0x1234
-        assert_eq!(param, 0x1234);
-
-        let matching_address = [
-            0x12u8, 0x34, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        ];
-
-        assert!(
-            compare_prefix(&matching_address, param_bytes, param),
-            "应该匹配 0x1234 开头的地址"
-        );
-
-        println!("✓ 前缀匹配逻辑测试通过 (1234)");
-        println!("  参数字节数: {}", param_bytes);
-        println!("  参数值: 0x{:010X}", param);
-    }
-
-    /// 测试: 单字节前缀
-    #[test]
-    fn test_compare_prefix_single_byte() {
-        let condition = parse_prefix_condition("AB").unwrap();
-        let param_bytes = ((condition >> 44) & 0x0F) as usize;
-        let param = condition & 0xFFFFFFFFFF;
-
-        // "AB" -> bytes=[0xAB] -> param = 0xAB
-        assert_eq!(param, 0xAB);
-        assert_eq!(param_bytes, 1);
-
-        let matching_address = [
-            0xABu8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        ];
-
-        assert!(
-            compare_prefix(&matching_address, param_bytes, param),
-            "应该匹配 0xAB 开头的地址"
-        );
-
-        println!("✓ 单字节前缀测试通过 (AB)");
+    fn test_prefix_like_pattern_is_supported() {
+        assert!(parse_pattern_condition("0x8888XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX").is_ok());
     }
 
     #[test]
@@ -365,9 +283,7 @@ mod tests {
     }
 
     #[test]
-    fn test_condition_parser_functions_still_available() {
-        assert!(parse_suffix_condition("dead").is_ok());
-        assert!(parse_leading_zeros_condition(4).is_ok());
+    fn test_pattern_parser_still_available() {
         assert!(parse_pattern_condition("0xXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXdead").is_ok());
     }
 }

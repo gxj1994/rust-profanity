@@ -7,9 +7,7 @@ use std::thread::sleep;
 use std::time::{Duration, Instant};
 
 use crate::config::{
-    PatternConfig, SearchConfig, SearchResult, SourceMode, TargetChain,
-    parse_leading_zeros_condition, parse_pattern_condition, parse_prefix_condition,
-    parse_suffix_condition,
+    PatternConfig, SearchConfig, SearchResult, SourceMode, TargetChain, parse_pattern_condition,
 };
 use crate::kernel_loader::load_kernel_source;
 use crate::mnemonic::Mnemonic;
@@ -249,9 +247,21 @@ pub fn search(request: SearchRequest) -> anyhow::Result<SearchResponse> {
 
 fn parse_condition(condition: &SearchCondition) -> anyhow::Result<(u64, Option<PatternConfig>)> {
     match condition {
-        SearchCondition::Prefix(value) => parse_prefix_condition_via_api(value),
-        SearchCondition::Suffix(value) => Ok((parse_suffix_condition(value)?, None)),
-        SearchCondition::LeadingZeros(value) => Ok((parse_leading_zeros_condition(*value)?, None)),
+        SearchCondition::Prefix(value) => {
+            let pattern = normalize_hex_pattern(value, PatternKind::Prefix)?;
+            let (condition, pattern) = parse_pattern_condition(&pattern)?;
+            Ok((condition, Some(pattern)))
+        }
+        SearchCondition::Suffix(value) => {
+            let pattern = normalize_hex_pattern(value, PatternKind::Suffix)?;
+            let (condition, pattern) = parse_pattern_condition(&pattern)?;
+            Ok((condition, Some(pattern)))
+        }
+        SearchCondition::LeadingZeros(value) => {
+            let pattern = normalize_leading_zeros_pattern(*value)?;
+            let (condition, pattern) = parse_pattern_condition(&pattern)?;
+            Ok((condition, Some(pattern)))
+        }
         SearchCondition::Pattern(value) => {
             let (condition, pattern) = parse_pattern_condition(value)?;
             Ok((condition, Some(pattern)))
@@ -259,26 +269,41 @@ fn parse_condition(condition: &SearchCondition) -> anyhow::Result<(u64, Option<P
     }
 }
 
-fn parse_prefix_condition_via_api(value: &str) -> anyhow::Result<(u64, Option<PatternConfig>)> {
+#[derive(Clone, Copy)]
+enum PatternKind {
+    Prefix,
+    Suffix,
+}
+
+fn normalize_hex_pattern(value: &str, kind: PatternKind) -> anyhow::Result<String> {
     let hex = value
         .strip_prefix("0x")
         .or_else(|| value.strip_prefix("0X"))
         .unwrap_or(value);
 
-    // Prefix path uses byte comparison; odd nibble count is routed to pattern matching.
-    if hex.len() % 2 == 1 {
-        if !hex.chars().all(|c| c.is_ascii_hexdigit()) {
-            anyhow::bail!("Input must contain only hexadecimal characters (0-9, a-f, A-F)");
-        }
-        if hex.len() > 12 {
-            anyhow::bail!("Input too long, max 12 hex characters (6 bytes)");
-        }
-        let pattern_str = format!("0x{}{}", hex, "X".repeat(40 - hex.len()));
-        let (condition, pattern) = parse_pattern_condition(&pattern_str)?;
-        Ok((condition, Some(pattern)))
-    } else {
-        Ok((parse_prefix_condition(value)?, None))
+    if hex.is_empty() {
+        anyhow::bail!("Input cannot be empty");
     }
+    if !hex.chars().all(|c| c.is_ascii_hexdigit()) {
+        anyhow::bail!("Input must contain only hexadecimal characters (0-9, a-f, A-F)");
+    }
+    if hex.len() > 40 {
+        anyhow::bail!("Input too long, max 40 hex characters");
+    }
+
+    let wildcard = "X".repeat(40 - hex.len());
+    Ok(match kind {
+        PatternKind::Prefix => format!("0x{}{}", hex, wildcard),
+        PatternKind::Suffix => format!("0x{}{}", wildcard, hex),
+    })
+}
+
+fn normalize_leading_zeros_pattern(zeros: u32) -> anyhow::Result<String> {
+    if zeros > 40 {
+        anyhow::bail!("Leading zeros cannot exceed 40");
+    }
+    let zeros = zeros as usize;
+    Ok(format!("0x{}{}", "0".repeat(zeros), "X".repeat(40 - zeros)))
 }
 
 fn random_nonzero_seed() -> [u8; 32] {
@@ -337,15 +362,32 @@ mod tests {
     fn test_parse_prefix_condition_via_api() {
         let (condition, pattern) =
             parse_condition(&SearchCondition::Prefix(String::from("8888"))).unwrap();
-        assert!(pattern.is_none());
+        assert!(pattern.is_some());
         let cond_type = (condition >> 48) & 0xFFFF;
-        assert_eq!(cond_type, ConditionType::Prefix as u64);
+        assert_eq!(cond_type, ConditionType::Pattern as u64);
     }
 
     #[test]
     fn test_parse_odd_prefix_condition_via_api_falls_back_to_pattern() {
         let (condition, pattern) =
             parse_condition(&SearchCondition::Prefix(String::from("000"))).unwrap();
+        assert!(pattern.is_some());
+        let cond_type = (condition >> 48) & 0xFFFF;
+        assert_eq!(cond_type, ConditionType::Pattern as u64);
+    }
+
+    #[test]
+    fn test_parse_suffix_condition_via_api_uses_pattern() {
+        let (condition, pattern) =
+            parse_condition(&SearchCondition::Suffix(String::from("dead"))).unwrap();
+        assert!(pattern.is_some());
+        let cond_type = (condition >> 48) & 0xFFFF;
+        assert_eq!(cond_type, ConditionType::Pattern as u64);
+    }
+
+    #[test]
+    fn test_parse_leading_zeros_condition_via_api_uses_pattern() {
+        let (condition, pattern) = parse_condition(&SearchCondition::LeadingZeros(4)).unwrap();
         assert!(pattern.is_some());
         let cond_type = (condition >> 48) & 0xFFFF;
         assert_eq!(cond_type, ConditionType::Pattern as u64);
