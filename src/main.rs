@@ -221,15 +221,20 @@ fn main() -> anyhow::Result<()> {
         sleep(Duration::from_millis(args.poll_interval));
     }
     
-    // 8. 读取结果（超时后使用非阻塞方式）
-    let is_timeout = timeout_enabled && start_time.elapsed().as_secs() >= timeout_secs;
-    let result = if !found && is_timeout {
-        // 超时情况下，尝试非阻塞读取，如果失败则使用默认值
-        search_kernel.read_result_nonblock().unwrap_or_default()
-    } else {
-        search_kernel.read_result()?
+    // 8. 读取结果
+    // 注意：始终使用非阻塞方式，避免内核仍在运行时阻塞主线程
+    let result = loop {
+        match search_kernel.read_result_nonblock() {
+            Ok(r) => break r,
+            Err(_) => {
+                // 读取未完成，等待一段时间后重试
+                sleep(Duration::from_millis(100));
+                continue;
+            }
+        }
     };
     let elapsed = start_time.elapsed();
+    let is_timeout = timeout_enabled && elapsed.as_secs() >= timeout_secs;
     
     // 9. 输出结果
     println!();
