@@ -1,6 +1,6 @@
 //! OpenCL 内核加载与执行
 
-use ocl::{Buffer, Kernel, Program, SpatialDims, Event};
+use ocl::{Buffer, Kernel, Program, SpatialDims};
 use log::{info, debug};
 
 use crate::config::{SearchConfig, SearchResult};
