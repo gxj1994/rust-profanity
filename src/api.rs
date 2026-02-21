@@ -12,6 +12,7 @@ use crate::config::{
     parse_suffix_condition,
 };
 use crate::kernel_loader::load_kernel_source;
+use crate::mnemonic::Mnemonic;
 use crate::opencl::{OpenCLContext, SearchKernel};
 
 #[derive(Debug, Clone)]
@@ -70,6 +71,20 @@ impl SearchResponse {
 
     pub fn result_seed_hex(&self) -> Option<String> {
         self.result_seed.map(hex::encode)
+    }
+
+    /// 根据 source_mode 返回助记词或私钥字符串
+    /// - MnemonicEntropy: 返回助记词
+    /// - PrivateKey: 返回私钥 (0x 开头的十六进制字符串)
+    pub fn result_seed_display(&self) -> Option<String> {
+        let seed = self.result_seed?;
+        match self.source_mode {
+            SourceMode::MnemonicEntropy => {
+                let mnemonic = Mnemonic::from_entropy(&seed).ok()?;
+                Some(mnemonic.to_string())
+            }
+            SourceMode::PrivateKey => Some(format!("0x{}", hex::encode(seed))),
+        }
     }
 }
 
