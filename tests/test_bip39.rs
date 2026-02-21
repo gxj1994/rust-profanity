@@ -3,6 +3,7 @@
 use bip39::{Mnemonic, Language};
 use ocl::{ProQue, Buffer, MemFlags};
 use ocl::enums::{ProgramBuildInfo, ProgramBuildInfoResult};
+use rust_profanity::kernel_loader::load_kernel_stages;
 
 const BIP39_TEST_VECTORS: &[(&str, &str)] = &[
     // (助记词, 种子十六进制)
@@ -20,11 +21,8 @@ const BIP39_TEST_VECTORS: &[(&str, &str)] = &[
     ),
 ];
 
-fn load_kernel_source() -> String {
-    let mut source = String::new();
-    source.push_str(include_str!("../kernels/crypto/sha512.cl"));
-    source.push_str(include_str!("../kernels/crypto/pbkdf2.cl"));
-    source
+fn load_pbkdf2_kernel_source() -> String {
+    load_kernel_stages(&["sha512", "pbkdf2"]).expect("Failed to load kernel stages")
 }
 
 fn rust_mnemonic_to_seed(mnemonic_phrase: &str) -> [u8; 64] {
@@ -33,7 +31,7 @@ fn rust_mnemonic_to_seed(mnemonic_phrase: &str) -> [u8; 64] {
 }
 
 fn opencl_mnemonic_to_seed(word_indices: &[u16; 24]) -> ocl::Result<[u8; 64]> {
-    let kernel_source = load_kernel_source();
+    let kernel_source = load_pbkdf2_kernel_source();
     
     let proque = ProQue::builder()
         .src(kernel_source)
@@ -280,6 +278,8 @@ mod tests {
     #[test]
     #[ignore]
     fn test_opencl_compile_matrix() {
+        use rust_profanity::kernel_loader::load_kernel_stages;
+        
         let with_smoke = |body: &str| -> String {
             let mut s = String::new();
             s.push_str(body);
@@ -288,31 +288,23 @@ mod tests {
             s
         };
 
-        let mut stages: Vec<(&str, String)> = Vec::new();
-        stages.push(("smoke_only", with_smoke("")));
+        let stages_config: Vec<(&str, Vec<&str>)> = vec![
+            ("smoke_only", vec![]),
+            ("sha512", vec!["sha512"]),
+            ("sha512+pbkdf2", vec!["sha512", "pbkdf2"]),
+            ("...+sha256", vec!["sha512", "pbkdf2", "sha256"]),
+            ("...+keccak", vec!["sha512", "pbkdf2", "sha256", "keccak"]),
+            ("...+secp256k1", vec!["sha512", "pbkdf2", "sha256", "keccak", "secp256k1"]),
+        ];
 
-        let mut base = String::new();
-        base.push_str(include_str!("../kernels/crypto/sha512.cl"));
-        base.push('\n');
-        stages.push(("sha512", with_smoke(&base)));
-
-        base.push_str(include_str!("../kernels/crypto/pbkdf2.cl"));
-        base.push('\n');
-        stages.push(("sha512+pbkdf2", with_smoke(&base)));
-
-        base.push_str(include_str!("../kernels/crypto/sha256.cl"));
-        base.push('\n');
-        stages.push(("...+sha256", with_smoke(&base)));
-
-        base.push_str(include_str!("../kernels/crypto/keccak.cl"));
-        base.push('\n');
-        stages.push(("...+keccak", with_smoke(&base)));
-
-        base.push_str(include_str!("../kernels/crypto/secp256k1.cl"));
-        base.push('\n');
-        stages.push(("...+secp256k1", with_smoke(&base)));
-
-        for (name, stage_src) in stages {
+        for (name, stages) in stages_config {
+            let base = if stages.is_empty() {
+                String::new()
+            } else {
+                load_kernel_stages(&stages).expect("Failed to load kernel stages")
+            };
+            let stage_src = with_smoke(&base);
+            
             match build_and_create_smoke_kernel(&stage_src, None) {
                 Ok(_) => println!("[OK] {}", name),
                 Err(e) => {
@@ -551,7 +543,7 @@ fn test_detailed_address_generation() {
 #[test]
 fn test_opencl_address_matches_rust() {
     use ocl::{ProQue, Buffer, MemFlags};
-    use rust_profanity::mnemonic::Mnemonic;
+    use rust_profanity::{mnemonic::Mnemonic, load_kernel_source};
     
     // 使用与Rust测试相同的助记词
     let mnemonic_str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon art";
@@ -563,37 +555,7 @@ fn test_opencl_address_matches_rust() {
     println!("测试熵: {}", hex::encode(&entropy));
     
     // 加载完整的内核源代码 (与主程序相同)
-    let mut source = String::new();
-    source.push_str(include_str!("../kernels/crypto/sha512.cl"));
-    source.push('\n');
-    source.push_str(include_str!("../kernels/crypto/pbkdf2.cl"));
-    source.push('\n');
-    source.push_str(include_str!("../kernels/crypto/sha256.cl"));
-    source.push('\n');
-    source.push_str(include_str!("../kernels/crypto/keccak.cl"));
-    source.push('\n');
-    source.push_str(include_str!("../kernels/crypto/secp256k1.cl"));
-    source.push('\n');
-    source.push_str(include_str!("../kernels/utils/condition.cl"));
-    source.push('\n');
-    source.push_str(include_str!("../kernels/bip39/wordlist.cl"));
-    source.push('\n');
-    source.push_str(include_str!("../kernels/bip39/entropy.cl"));
-    source.push('\n');
-    
-    // search.cl 的内容 (去掉 #include)
-    let search_kernel = include_str!("../kernels/search.cl");
-    for line in search_kernel.lines() {
-        if !line.trim_start().starts_with("#include") {
-            source.push_str(line);
-            source.push('\n');
-        }
-    }
-    source.push('\n');
-    
-    // mnemonic.cl
-    source.push_str(include_str!("../kernels/bip39/mnemonic.cl"));
-    source.push('\n');
+    let mut source = load_kernel_source().expect("加载内核源代码失败");
     
     // 添加测试内核
     source.push_str(r#"

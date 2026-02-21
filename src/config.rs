@@ -23,12 +23,15 @@ impl Default for PatternConfig {
 }
 
 /// 搜索任务配置 (传递给 GPU)
+/// 
 /// 注意：必须与 OpenCL 的 search_config_t 结构体完全匹配
 /// OpenCL 布局: base_seed[32] @0, num_threads @32, source_mode @36, target_chain @40,
 ///              _padding1[4] @44, condition @48, check_interval @56, _padding2[4] @60,
 ///              pattern_mask[20] @64, pattern_value[20] @84
 /// 总大小: 104 bytes
-#[repr(C)]
+/// 
+/// 使用 `#[repr(C, align(8))]` 确保 8 字节对齐，与 OpenCL 端保持一致
+#[repr(C, align(8))]
 #[derive(Debug, Clone, Copy)]
 pub struct SearchConfig {
     /// 基础种子 (32字节 = 256位) - 对应 OpenCL uchar[32]
@@ -41,14 +44,15 @@ pub struct SearchConfig {
     /// 目标链类型 - 对应 OpenCL uint
     pub target_chain: u32,
     /// 填充以对齐 condition 到 8 字节边界 - 对应 OpenCL _padding1[4]
-    _padding1: [u8; 4],
+    /// 使用 explicit padding 字段确保内存布局正确
+    pub _padding1: [u8; 4],
     /// 搜索条件编码 - 对应 OpenCL ulong
     /// 高16位: 条件类型, 低48位: 条件参数
     pub condition: u64,
     /// 检查标志间隔 (迭代次数) - 对应 OpenCL uint
     pub check_interval: u32,
     /// 填充以对齐 pattern_config - 对应 OpenCL _padding2[4]
-    _padding2: [u8; 4],
+    pub _padding2: [u8; 4],
     /// 模式匹配配置 - 用于 profanity 风格的模式匹配
     /// 当 condition 类型为 Pattern 时使用
     pub pattern_config: PatternConfig,

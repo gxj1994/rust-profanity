@@ -151,6 +151,7 @@ rust-profanity/
 │   ├── main.rs              # 程序入口
 │   ├── lib.rs               # 库模块
 │   ├── config.rs            # 配置和条件解析
+│   ├── kernel_loader.rs     # OpenCL 内核源代码加载
 │   ├── mnemonic.rs          # BIP39 助记词生成
 │   ├── wordlist.rs          # BIP39 单词表 (2048词)
 │   └── opencl/
@@ -166,10 +167,15 @@ rust-profanity/
 │   │   ├── sha512.cl        # SHA512
 │   │   └── pbkdf2.cl        # PBKDF2 密钥派生
 │   ├── bip39/
-│   │   └── mnemonic.cl      # BIP39/BIP32 实现
+│   │   ├── entropy.cl       # BIP39 熵处理
+│   │   ├── mnemonic.cl      # BIP39/BIP32 实现
+│   │   └── wordlist.cl      # BIP39 单词表
 │   └── utils/
 │       └── condition.cl     # 条件匹配
 ├── tests/                   # 测试代码
+│   ├── mod.rs               # 测试模块入口
+│   ├── common/              # 测试公共函数
+│   │   └── mod.rs
 │   ├── test_keccak.rs
 │   ├── test_bip39.rs
 │   ├── test_bip32.rs

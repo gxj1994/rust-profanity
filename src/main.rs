@@ -15,6 +15,7 @@ use std::thread::sleep;
 
 use rust_profanity::{
     config::{*, PatternConfig},
+    load_kernel_source,
     mnemonic::Mnemonic,
     opencl::{OpenCLContext, SearchKernel},
 };
@@ -98,62 +99,7 @@ fn parse_condition(args: &Args) -> anyhow::Result<(u64, Option<PatternConfig>)> 
     }
 }
 
-/// 加载完整版内核源代码 (包含完整加密实现)
-fn load_kernel_source() -> anyhow::Result<String> {
-    // 读取主内核文件
-    let mut source = String::new();
-    
-    // 由于 OpenCL 不支持 #include，我们需要手动合并所有文件
-    // 按正确的依赖顺序包含所有内核代码
-    
-    // 1. SHA-512 (PBKDF2 依赖)
-    source.push_str(include_str!("../kernels/crypto/sha512.cl"));
-    source.push('\n');
-    
-    // 2. PBKDF2 (BIP39 依赖)
-    source.push_str(include_str!("../kernels/crypto/pbkdf2.cl"));
-    source.push('\n');
-    
-    // 3. SHA-256 (BIP39 校验和计算依赖)
-    source.push_str(include_str!("../kernels/crypto/sha256.cl"));
-    source.push('\n');
-    
-    // 4. Keccak-256 (以太坊地址生成)
-    source.push_str(include_str!("../kernels/crypto/keccak.cl"));
-    source.push('\n');
-    
-    // 5. secp256k1 (椭圆曲线运算)
-    source.push_str(include_str!("../kernels/crypto/secp256k1.cl"));
-    source.push('\n');
-    
-    // 6. 条件匹配
-    source.push_str(include_str!("../kernels/utils/condition.cl"));
-    source.push('\n');
-    
-    // 7. BIP39 词表 (entropy.cl 和 mnemonic.cl 依赖)
-    source.push_str(include_str!("../kernels/bip39/wordlist.cl"));
-    source.push('\n');
-    
-    // 8. BIP39 熵处理 (entropy_to_mnemonic 等，依赖 sha256 和 wordlist)
-    source.push_str(include_str!("../kernels/bip39/entropy.cl"));
-    source.push('\n');
-    
-    // 9. 主搜索内核 (包含 local_mnemonic_t 定义，必须在 mnemonic.cl 之前)
-    let search_kernel = include_str!("../kernels/search.cl");
-    for line in search_kernel.lines() {
-        if !line.trim_start().starts_with("#include") {
-            source.push_str(line);
-            source.push('\n');
-        }
-    }
-    source.push('\n');
-    
-    // 10. BIP39 助记词处理 (依赖 local_mnemonic_t 和 wordlist.cl)
-    source.push_str(include_str!("../kernels/bip39/mnemonic.cl"));
-    source.push('\n');
-    
-    Ok(source)
-}
+
 
 /// 打印进度到同一行（仅显示运行时间）
 fn print_progress_line(elapsed: f64) {

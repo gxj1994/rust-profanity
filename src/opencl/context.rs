@@ -1,6 +1,7 @@
 //! OpenCL 上下文管理
 
 use ocl::{Context, Device, Platform, Queue};
+use ocl::enums::DeviceInfo;
 use log::info;
 
 /// OpenCL 上下文结构
@@ -39,14 +40,29 @@ impl OpenCLContext {
             // 优先选择 GPU 设备
             for device in devices {
                 let device_name = device.name()?;
-                info!("  Device: {}", device_name);
                 
-                // 尝试检测是否为 GPU (通过设备名称判断)
-                let is_gpu = device_name.to_lowercase().contains("gpu")
-                    || device_name.to_lowercase().contains("graphics")
-                    || device_name.to_lowercase().contains("nvidia")
-                    || device_name.to_lowercase().contains("amd")
-                    || device_name.to_lowercase().contains("radeon");
+                // 使用 OpenCL API 查询设备类型
+                let device_type = device.info(DeviceInfo::Type).ok()
+                    .and_then(|t| t.to_string().parse::<u64>().ok())
+                    .map(|t| match t {
+                        4 => "GPU",
+                        2 => "CPU",
+                        8 => "ACCELERATOR",
+                        _ => "OTHER",
+                    })
+                    .unwrap_or("UNKNOWN");
+                
+                info!("  Device: {} (Type: {})", device_name, device_type);
+                
+                // 检测是否为 GPU (优先使用 API 查询，回退到名称判断)
+                let is_gpu = device_type == "GPU" || {
+                    let name_lower = device_name.to_lowercase();
+                    name_lower.contains("gpu")
+                        || name_lower.contains("graphics")
+                        || name_lower.contains("nvidia")
+                        || name_lower.contains("amd")
+                        || name_lower.contains("radeon")
+                };
                 
                 if is_gpu {
                     selected_platform = Some(*platform);

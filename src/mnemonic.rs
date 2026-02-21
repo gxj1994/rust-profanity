@@ -82,8 +82,12 @@ impl Mnemonic {
     }
     
     /// 转换为 BIP39 种子
+    /// 
+    /// # Panics
+    /// 如果助记词包含无效的单词索引，会 panic
     pub fn to_seed(&self, passphrase: &str) -> [u8; 64] {
-        let mnemonic_str = self.to_string();
+        let mnemonic_str = self.as_phrase()
+            .expect("Invalid mnemonic word index");
         let salt = format!("mnemonic{}", passphrase);
         
         use pbkdf2::pbkdf2_hmac;
@@ -101,18 +105,20 @@ impl Mnemonic {
     }
     
     /// 转换为字符串
-    pub fn as_phrase(&self) -> String {
-        self.words
-            .iter()
-            .map(|&idx| {
-                if (idx as usize) < BIP39_WORDLIST.len() {
-                    BIP39_WORDLIST[idx as usize]
-                } else {
-                    "unknown"
-                }
-            })
-            .collect::<Vec<_>>()
-            .join(" ")
+    /// 
+    /// # Errors
+    /// 如果单词索引超出有效范围 (0-2047)，返回错误
+    pub fn as_phrase(&self) -> anyhow::Result<String> {
+        let mut words = Vec::with_capacity(24);
+        for (i, &idx) in self.words.iter().enumerate() {
+            if (idx as usize) < BIP39_WORDLIST.len() {
+                words.push(BIP39_WORDLIST[idx as usize]);
+            } else {
+                anyhow::bail!("Invalid word index {} at position {} (max: {})", 
+                    idx, i, BIP39_WORDLIST.len() - 1);
+            }
+        }
+        Ok(words.join(" "))
     }
     
     /// 从字符串解析
@@ -180,7 +186,10 @@ impl Mnemonic {
 
 impl std::fmt::Display for Mnemonic {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.as_phrase())
+        match self.as_phrase() {
+            Ok(phrase) => write!(f, "{}", phrase),
+            Err(e) => write!(f, "<invalid mnemonic: {}>", e),
+        }
     }
 }
 

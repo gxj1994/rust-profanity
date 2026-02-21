@@ -1,14 +1,34 @@
-// secp256k1 椭圆曲线运算 (OpenCL)
-// 基于经过验证的 32 位实现
-// 使用 8 个 32 位字表示 256 位数字
+/**
+ * @file secp256k1.cl
+ * @brief secp256k1 椭圆曲线运算实现 (OpenCL)
+ * 
+ * 本文件实现了 secp256k1 椭圆曲线的核心运算，包括：
+ * - 256位多精度整数运算 (mp_number)
+ * - 模运算 (加、减、乘、逆)
+ * - 椭圆曲线点运算 (倍加、点加、标量乘)
+ * - 公钥生成和地址派生
+ * 
+ * 实现基于 32 位字的多精度运算，使用 8 个 uint 表示 256 位数字。
+ * 所有运算都在素数域 p 上进行，其中：
+ *   p = 2^256 - 2^32 - 2^9 - 2^8 - 2^7 - 2^6 - 2^4 - 1
+ *   = FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2F
+ * 
+ * 注意：mp_number 使用小端序存储，d[0] 是最低有效位。
+ */
 
 #ifndef SECP256K1_CL
 #define SECP256K1_CL
 
-#define MP_WORDS 8
+#define MP_WORDS 8  ///< 256位数字使用的 32 位字数
 
-typedef uint mp_word;
+typedef uint mp_word;  ///< 多精度字类型
 
+/**
+ * @brief 256位多精度整数结构
+ * 
+ * 使用 8 个 32 位无符号整数表示 256 位数字。
+ * 小端序存储：d[0] 是最低有效位，d[7] 是最高有效位。
+ */
 typedef struct {
 	mp_word d[MP_WORDS];
 } mp_number;
