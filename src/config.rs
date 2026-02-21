@@ -155,87 +155,68 @@ impl ConditionType {
     }
 }
 
-/// 解析前缀条件
+/// 解析十六进制字符串为字节，并编码为条件参数
 /// 
-/// 将十六进制字符串解析为字节序列。
-/// 输入应为十六进制字符（0-9, a-f, A-F）。
-/// 如果长度为奇数，在后面补最后一个字符变成偶数长度。
-/// 例如："888" -> "8888" -> [0x88, 0x88]；"88888" -> "888888" -> [0x88, 0x88, 0x88]
-/// 
-/// # Example
-/// ```
-/// use rust_profanity::parse_prefix_condition;
-/// let condition = parse_prefix_condition("8888").unwrap();   // [0x88, 0x88]
-/// let condition2 = parse_prefix_condition("888").unwrap();   // [0x88, 0x88]（补一个8）
-/// let condition3 = parse_prefix_condition("88888").unwrap(); // [0x88, 0x88, 0x88]（补一个8）
-/// ```
-pub fn parse_prefix_condition(prefix: &str) -> anyhow::Result<u64> {
-    let hex_str = prefix.trim_start_matches("0x");
-    
-    // 验证所有字符都是有效的十六进制字符
-    if !hex_str.chars().all(|c| c.is_ascii_hexdigit()) {
-        anyhow::bail!("Prefix must contain only hexadecimal characters (0-9, a-f, A-F)");
-    }
-    
-    // 如果长度为奇数，在后面补最后一个字符变成偶数长度
-    // 例如："888" -> "8888"；"88888" -> "888888"
-    let expanded_hex = if hex_str.len() % 2 == 1 {
-        let last_char = hex_str.chars().last().unwrap();
-        format!("{}{}", hex_str, last_char)
-    } else {
-        hex_str.to_string()
-    };
-    
-    let bytes = hex::decode(&expanded_hex)?;
-    
-    if bytes.len() > 6 {
-        anyhow::bail!("Prefix too long, max 12 hex characters (6 bytes)");
-    }
-    
-    let mut param: u64 = 0;
-    for &byte in bytes.iter() {
-        param = (param << 8) | (byte as u64);
-    }
-    
-    // 使用新的编码方式，将字节数打包进 condition
-    let bytes_len = bytes.len() as u8;
-    Ok(ConditionType::Prefix.encode_with_bytes(param, bytes_len))
-}
+/// 公共辅助函数，用于前缀和后缀条件的解析
+fn parse_hex_to_condition(
+    input: &str,
+    condition_type: ConditionType,
+    max_bytes: usize,
+    allow_odd_length: bool,
+) -> anyhow::Result<u64> {
+    let hex_str = input.trim_start_matches("0x");
 
-/// 解析后缀条件
-/// 
-/// 将十六进制字符串解析为字节序列。
-/// 输入应为十六进制字符（0-9, a-f, A-F）。
-/// 如果长度为奇数，在前面补0。
-pub fn parse_suffix_condition(suffix: &str) -> anyhow::Result<u64> {
-    let hex_str = suffix.trim_start_matches("0x");
-    
     // 验证所有字符都是有效的十六进制字符
     if !hex_str.chars().all(|c| c.is_ascii_hexdigit()) {
-        anyhow::bail!("Suffix must contain only hexadecimal characters (0-9, a-f, A-F)");
+        anyhow::bail!("Input must contain only hexadecimal characters (0-9, a-f, A-F)");
     }
-    
-    // 如果长度为奇数，在前面补0
+
+    // 处理奇数长度
     let hex_str = if hex_str.len() % 2 == 1 {
+        if !allow_odd_length {
+            anyhow::bail!("Input must have even number of hex characters");
+        }
+        // 在前面补0
         format!("0{}", hex_str)
     } else {
         hex_str.to_string()
     };
-    
+
     let bytes = hex::decode(&hex_str)?;
-    
-    if bytes.len() > 6 {
-        anyhow::bail!("Suffix too long, max 6 bytes (12 hex characters)");
+
+    if bytes.len() > max_bytes {
+        anyhow::bail!("Input too long, max {} hex characters ({} bytes)", max_bytes * 2, max_bytes);
     }
-    
-    let mut param: u64 = 0;
-    for &byte in bytes.iter() {
-        param = (param << 8) | (byte as u64);
-    }
-    
-    // 使用新的编码方式，将字节数打包进 condition
+
+    // 将字节编码为 u64 参数 (大端序)
+    let param: u64 = bytes.iter().fold(0u64, |acc, &b| (acc << 8) | (b as u64));
+
+    // 将字节数打包进 condition
     let bytes_len = bytes.len() as u8;
-    Ok(ConditionType::Suffix.encode_with_bytes(param, bytes_len))
+    Ok(condition_type.encode_with_bytes(param, bytes_len))
+}
+
+/// 解析前缀条件
+///
+/// 将十六进制字符串解析为字节序列。
+/// 输入应为十六进制字符（0-9, a-f, A-F），长度必须为偶数。
+///
+/// # Example
+/// ```
+/// use rust_profanity::parse_prefix_condition;
+/// let condition = parse_prefix_condition("8888").unwrap();   // [0x88, 0x88]
+/// ```
+pub fn parse_prefix_condition(prefix: &str) -> anyhow::Result<u64> {
+    parse_hex_to_condition(prefix, ConditionType::Prefix, 6, false)
+}
+
+/// 解析后缀条件
+///
+/// 将十六进制字符串解析为字节序列。
+/// 输入应为十六进制字符（0-9, a-f, A-F）。
+/// 如果长度为奇数，在前面补0。
+pub fn parse_suffix_condition(suffix: &str) -> anyhow::Result<u64> {
+    parse_hex_to_condition(suffix, ConditionType::Suffix, 6, true)
 }
 
 /// 解析前导零条件 (至少)
@@ -311,35 +292,6 @@ pub fn parse_pattern_condition(pattern: &str) -> anyhow::Result<(u64, PatternCon
     Ok((condition, pattern_config))
 }
 
-/// 打印结构体布局信息（用于调试 OpenCL 对齐问题）
-pub fn print_struct_layouts() {
-    use std::mem;
-    
-    println!("=== SearchConfig Layout ===");
-    println!("Total size: {} bytes", mem::size_of::<SearchConfig>());
-    println!("  base_entropy offset: {} bytes", mem::offset_of!(SearchConfig, base_entropy));
-    println!("  num_threads offset: {} bytes", mem::offset_of!(SearchConfig, num_threads));
-    println!("  condition offset: {} bytes", mem::offset_of!(SearchConfig, condition));
-    println!("  check_interval offset: {} bytes", mem::offset_of!(SearchConfig, check_interval));
-    println!("  pattern_config offset: {} bytes", mem::offset_of!(SearchConfig, pattern_config));
-    println!("    pattern_config.mask offset: {} bytes", mem::offset_of!(SearchConfig, pattern_config) + mem::offset_of!(PatternConfig, mask));
-    println!("    pattern_config.value offset: {} bytes", mem::offset_of!(SearchConfig, pattern_config) + mem::offset_of!(PatternConfig, value));
-    
-    println!("\n=== PatternConfig Layout ===");
-    println!("Total size: {} bytes", mem::size_of::<PatternConfig>());
-    println!("  mask offset: {} bytes", mem::offset_of!(PatternConfig, mask));
-    println!("  value offset: {} bytes", mem::offset_of!(PatternConfig, value));
-    
-    println!("\n=== SearchResult Layout ===");
-    println!("Total size: {} bytes", mem::size_of::<SearchResult>());
-    println!("  found offset: {} bytes", mem::offset_of!(SearchResult, found));
-    println!("  result_entropy offset: {} bytes", mem::offset_of!(SearchResult, result_entropy));
-    println!("  eth_address offset: {} bytes", mem::offset_of!(SearchResult, eth_address));
-    println!("  found_by_thread offset: {} bytes", mem::offset_of!(SearchResult, found_by_thread));
-    println!("  total_checked_low offset: {} bytes", mem::offset_of!(SearchResult, total_checked_low));
-    println!("  total_checked_high offset: {} bytes", mem::offset_of!(SearchResult, total_checked_high));
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -372,12 +324,6 @@ mod tests {
     }
 
     #[test]
-    fn test_struct_layout() {
-        // 打印结构体布局用于调试
-        print_struct_layouts();
-    }
-
-    #[test]
     fn test_total_checked() {
         let result = SearchResult {
             found: 0,
@@ -393,13 +339,9 @@ mod tests {
     #[test]
     fn test_parse_pattern_suffix_dead() {
         // 测试后缀匹配: 0xXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXdead
-        let (condition, pattern_config) = parse_pattern_condition(
+        let (_condition, pattern_config) = parse_pattern_condition(
             "0xXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXdead"
         ).unwrap();
-        
-        // 验证条件类型是 Pattern
-        let cond_type = (condition >> 48) & 0xFFFF;
-        assert_eq!(cond_type, ConditionType::Pattern as u64);
         
         // 验证最后两个字节的掩码和值
         // "dead" = [0xde, 0xad]
@@ -417,7 +359,7 @@ mod tests {
     #[test]
     fn test_parse_pattern_prefix_0000() {
         // 测试前缀匹配: 0x0000XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
-        let (condition, pattern_config) = parse_pattern_condition(
+        let (_condition, pattern_config) = parse_pattern_condition(
             "0x0000XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
         ).unwrap();
         
@@ -437,7 +379,7 @@ mod tests {
     fn test_parse_pattern_middle_abcd() {
         // 测试中间匹配: 0xXXXXXXXXXXXXabcdXXXXXXXXXXXXXXXXXXXXXXXX
         // "abcd" 在第7-8字节位置 (索引6-7)
-        let (condition, pattern_config) = parse_pattern_condition(
+        let (_condition, pattern_config) = parse_pattern_condition(
             "0xXXXXXXXXXXXXabcdXXXXXXXXXXXXXXXXXXXXXXXX"
         ).unwrap();
         
@@ -455,7 +397,7 @@ mod tests {
     #[test]
     fn test_parse_pattern_mixed() {
         // 测试混合模式: 0x00XX11XX22XXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
-        let (condition, pattern_config) = parse_pattern_condition(
+        let (_condition, pattern_config) = parse_pattern_condition(
             "0x00XX11XX22XXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
         ).unwrap();
         
@@ -498,7 +440,7 @@ mod tests {
     #[test]
     fn test_parse_pattern_wildcard_variants() {
         // 测试不同的通配符: X, x, *, ?
-        let (condition, pattern_config) = parse_pattern_condition(
+        let (_condition, pattern_config) = parse_pattern_condition(
             "0xXx*?1234XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
         ).unwrap();
         

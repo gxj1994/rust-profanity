@@ -151,18 +151,6 @@ impl SearchKernel {
     }
 }
 
-/// 加载内核源代码
-/// 
-/// 从文件系统加载所有 .cl 文件并合并
-pub fn load_kernel_source() -> anyhow::Result<String> {
-    let mut source = String::new();
-    
-    // 内联的内核代码 (简化版本，完整版本应该放在单独文件中)
-    source.push_str(include_str!("../../kernels/search.cl"));
-    
-    Ok(source)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -28,34 +28,57 @@ impl Mnemonic {
         // 计算校验和: SHA256 的前 8 位 (256/32 = 8)
         let hash = Sha256::digest(entropy);
         let checksum_bits = hash[0]; // 取前8位
-        
+
         // 组合: 256位熵 + 8位校验和 = 264位
         // 将数据视为大端序的位流
         let mut all_bits = [0u8; 33];
         all_bits[..32].copy_from_slice(entropy);
         all_bits[32] = checksum_bits;
-        
+
         // 提取24个11位索引
+        let words = Self::extract_word_indices(&all_bits);
+
+        Ok(Self { words })
+    }
+
+    /// 从位流中提取24个11位单词索引
+    fn extract_word_indices(all_bits: &[u8; 33]) -> [u16; 24] {
         let mut words = [0u16; 24];
         for (i, word) in words.iter_mut().enumerate() {
             let bit_offset = i * 11;
-            
-            // 读取11位索引 (可能跨越2-3个字节)
-            let mut idx: u16 = 0;
-            for j in 0..11 {
-                let bit_pos = bit_offset + j;
-                let byte_idx = bit_pos / 8;
-                let bit_in_byte = 7 - (bit_pos % 8); // 大端序: MSB在前
-                
-                if (all_bits[byte_idx] >> bit_in_byte) & 1 == 1 {
-                    idx |= 1 << (10 - j); // 大端序存储
-                }
-            }
-            
-            *word = idx & 0x7FF;
+            *word = Self::read_11bits(all_bits, bit_offset);
         }
-        
-        Ok(Self { words })
+        words
+    }
+
+    /// 从字节数组中读取11位值 (大端序位流)
+    #[inline]
+    fn read_11bits(data: &[u8; 33], bit_offset: usize) -> u16 {
+        let mut idx: u16 = 0;
+        for j in 0..11 {
+            let bit_pos = bit_offset + j;
+            let byte_idx = bit_pos / 8;
+            let bit_in_byte = 7 - (bit_pos % 8); // 大端序: MSB在前
+
+            if (data[byte_idx] >> bit_in_byte) & 1 == 1 {
+                idx |= 1 << (10 - j); // 大端序存储
+            }
+        }
+        idx & 0x7FF
+    }
+
+    /// 将11位值写入字节数组 (大端序位流)
+    #[inline]
+    fn write_11bits(data: &mut [u8; 33], bit_offset: usize, value: u16) {
+        for j in 0..11 {
+            let bit_pos = bit_offset + j;
+            let byte_idx = bit_pos / 8;
+            let bit_in_byte = 7 - (bit_pos % 8);
+
+            if (value >> (10 - j)) & 1 == 1 {
+                data[byte_idx] |= 1 << bit_in_byte;
+            }
+        }
     }
     
     /// 转换为 BIP39 种子
@@ -111,66 +134,46 @@ impl Mnemonic {
         Ok(Self { words })
     }
     
-    /// 验证助记词校验和 (BIP39 标准验证)
-    pub fn validate_checksum(&self) -> bool {
-        // 从单词索引重建位流
+    /// 从单词索引重建位流
+    fn rebuild_bitstream(&self) -> [u8; 33] {
         let mut all_bits = [0u8; 33];
-        
         for (i, &word_idx) in self.words.iter().enumerate() {
             let bit_offset = i * 11;
-            
-            for j in 0..11 {
-                let bit_pos = bit_offset + j;
-                let byte_idx = bit_pos / 8;
-                let bit_in_byte = 7 - (bit_pos % 8);
-                
-                if (word_idx >> (10 - j)) & 1 == 1 {
-                    all_bits[byte_idx] |= 1 << bit_in_byte;
-                }
-            }
+            Self::write_11bits(&mut all_bits, bit_offset, word_idx);
         }
-        
+        all_bits
+    }
+
+    /// 验证助记词校验和 (BIP39 标准验证)
+    pub fn validate_checksum(&self) -> bool {
+        let all_bits = self.rebuild_bitstream();
+
         // 提取熵和校验和
         let entropy = &all_bits[..32];
         let checksum = all_bits[32];
-        
+
         // 计算期望的校验和
         let hash = Sha256::digest(entropy);
         let expected_checksum = hash[0];
-        
+
         checksum == expected_checksum
     }
-    
+
     /// 从助记词重建熵 (256位)
     /// 返回熵和校验和是否有效的布尔值
     pub fn to_entropy(&self) -> ([u8; 32], bool) {
-        // 从单词索引重建位流
-        let mut all_bits = [0u8; 33];
-        
-        for (i, &word_idx) in self.words.iter().enumerate() {
-            let bit_offset = i * 11;
-            
-            for j in 0..11 {
-                let bit_pos = bit_offset + j;
-                let byte_idx = bit_pos / 8;
-                let bit_in_byte = 7 - (bit_pos % 8);
-                
-                if (word_idx >> (10 - j)) & 1 == 1 {
-                    all_bits[byte_idx] |= 1 << bit_in_byte;
-                }
-            }
-        }
-        
+        let all_bits = self.rebuild_bitstream();
+
         // 提取熵
         let mut entropy = [0u8; 32];
         entropy.copy_from_slice(&all_bits[..32]);
         let checksum = all_bits[32];
-        
+
         // 验证校验和
         let hash = Sha256::digest(entropy);
         let expected_checksum = hash[0];
         let valid = checksum == expected_checksum;
-        
+
         (entropy, valid)
     }
 }

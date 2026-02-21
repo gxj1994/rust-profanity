@@ -88,7 +88,7 @@ cargo test
 ./target/release/rust-profanity --pattern 0xXXXXXXXXXXXXabcdXXXXXXXXXXXXXXXXXXXXXXXX --threads 2048 --timeout 120
 
 # 搜索多个特定位置
-./target/release/rust-profanity --pattern 0x00XX11XX22XXXXXXXXXXXXXXXXXXXXXXXXXXXXXX --threads 4096 --timeout 300
+./target/release/rust-profanity --pattern 0x0XXX1XXXX2XXXXXXXXXXXXXXXXXXXXXXXXXXXX1X --threads 4096 --timeout 300
 ```
 
 ### 参数说明
